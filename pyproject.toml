@@ -1,0 +1,24 @@
+[project]
+name = "sonos-cli"
+version = "0.1.0"
+description = "Play audio files from this Mac on Sonos speakers, without the Sonos app"
+readme = "README.md"
+authors = [
+    { name = "Chris Aves", email = "chris@junctionbox.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "soco>=0.32.1",
+]
+
+[project.scripts]
+sonos = "sonos_cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.4,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
