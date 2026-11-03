@@ -534,8 +534,9 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
             res = (getattr(item, "resources", None) or [None])[0]
             uri = getattr(res, "uri", "") if res is not None else ""
             source = classify_source(uri, hosts, serve_port)
-            out.append({"index": i, "uri": uri, "title": getattr(item, "title", "") or uri,
-                        "artist": getattr(item, "creator", "") or "",
+            artist = getattr(item, "creator", "") or ""
+            out.append({"index": i, "uri": uri, "title": remote_mod.queue_title(uri, getattr(item, "title", "") or uri, artist),
+                        "artist": artist,
                         "host": source[len("other-host:"):] if source.startswith("other-host:") else None})
         track = state.get("track") or {}
         current = track.get("index")
@@ -720,7 +721,7 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
     async def send_preview_route(request: Request):
         try:
             title, tracks = await page_tracks(await json_body(request))
-            return JSONResponse({"title": title, "tracks": [{"title": t.title, "mime": t.mime, "url": t.url} for t in tracks]})
+            return JSONResponse({"title": title, "tracks": [{"title": t.title, "artist": t.artist, "mime": t.mime, "url": t.url} for t in tracks]})
         except PlayError as e:
             return problem(e)
         except remote_mod.RemoteError as e:
@@ -738,12 +739,14 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
 
             def go():
                 base = player.base_url_for(player.coordinator_for(room))
-                entries = [(f"{base}/remote/{remote_mod.sign(t.url, secret())}/{remote_mod.display_name(t.title, t.mime)}", t.title, t.mime)
+                # The speaker labels a track it hasn't read yet from the last part of its URL, so that name carries the artist too.
+                entries = [(f"{base}/remote/{remote_mod.sign(t.url, secret())}/"
+                            f"{remote_mod.display_name(f'{t.title} by {t.artist}' if t.artist else t.title, t.mime)}", t.title, t.mime)
                            for t in tracks]
                 result = player.play_urls(room, entries, body.get("mode", "replace"))
                 if monitor is not None:
                     monitor.refresh_group_of(room)
-                return {**result, "title": title, "tracks": [{"title": t.title, "url": t.url} for t in tracks]}
+                return {**result, "title": title, "tracks": [{"title": t.title, "artist": t.artist, "url": t.url} for t in tracks]}
 
             try:
                 return JSONResponse(await anyio.to_thread.run_sync(go))

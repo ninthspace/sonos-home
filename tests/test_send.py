@@ -584,3 +584,22 @@ def test_a_huge_link_text_cannot_hold_a_worker_for_long():
     for title in ("🎵" * 20000, "a" * 200000, "日本語" * 30000):
         assert len(remote.display_name(title, "audio/mpeg")) <= 240
     assert _t.time() - began < 1.0
+
+
+def test_a_page_with_an_artist_names_each_proxy_url_title_by_artist_and_the_response_carries_the_artist(tmp_path, origin):
+    from urllib.parse import unquote
+    system, monitor, client, cfg = make(tmp_path, origin)
+    r = send(client, room=system.lounge.uid, url=RELEASE_URL)
+    assert r.status_code == 200 and [t.get("artist") for t in r.json()["tracks"]] == ["Minim", "Minim"]
+    names = [unquote(i.resources[0].uri.rsplit("/", 1)[1]) for i in system.lounge.queue]
+    assert names == ["Halyard by Minim.mp3", "Undertow by Minim.mp3"]
+    assert [i.title for i in system.lounge.queue] == ["Halyard", "Undertow"]                  # the DIDL title is still the plain title
+    prev = client.post("/api/send/preview", json={"url": RELEASE_URL}, headers=JSON).json()
+    assert [t.get("artist") for t in prev["tracks"]] == ["Minim", "Minim"]
+
+
+def test_a_page_without_an_artist_keeps_the_plain_title_in_the_proxy_url_name(tmp_path, origin):
+    from urllib.parse import unquote
+    system, monitor, client, cfg = make(tmp_path, origin)
+    assert send(client, room=system.lounge.uid, html='<a href="x.mp3">Plain</a>', base_url="http://x.test/").status_code == 200
+    assert unquote(system.lounge.queue[0].resources[0].uri.rsplit("/", 1)[1]) == "Plain.mp3"

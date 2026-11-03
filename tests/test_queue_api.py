@@ -154,3 +154,50 @@ def test_a_queue_read_never_asks_for_more_than_the_play_cap_even_from_a_short_pa
 
     monkeypatch.setattr(FakeSoCo, "get_queue", short_pages)
     assert len(client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["items"]) <= 500
+
+
+# ---- a page's tracks as an S1 speaker reports them: tags for the playing and next track, the URL's file name for the rest ----
+
+def _s1_item(title, creator, uri):
+    from soco.data_structures import DidlMusicTrack, DidlResource
+    return DidlMusicTrack(title=title, parent_id="", item_id="x", creator=creator or None,
+                          resources=[DidlResource(uri=uri, protocol_info="http-get:*:audio/mpeg:*")])
+
+
+def test_a_pages_tracks_the_speaker_has_not_read_yet_show_the_title_we_sent_not_the_proxy_file_name(tmp_path):
+    from sonos_cli import remote
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    base = "http://127.0.0.1:8737/remote/TOKEN"
+    rows = [("Slack Water", "SHTL", f"{base}/{remote.display_name('Slack Water', 'audio/mpeg')}"),     # read: the speaker's tags win
+            ("Tideway.mp3", "", f"{base}/{remote.display_name('Tideway', 'audio/mpeg')}"),
+            ("Neap.mp3", "", f"{base}/{remote.display_name('Neap', 'audio/mpeg')}"),
+            ("Café – Ünïcode 100 日本.mp3", "", f"{base}/{remote.display_name('Café – Ünïcode 100% 日本', 'audio/mpeg')}"),      # "%" can't sit in a URL name
+            ("Drift.flac", "", f"{base}/{remote.display_name('Drift', 'audio/flac')}")]
+    for t, a, u in rows:
+        system.lounge.add_to_queue(_s1_item(t, a, u))
+    items = client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["items"]
+    assert [(i["title"], i["artist"]) for i in items] == [("Slack Water", "SHTL"), ("Tideway", ""), ("Neap", ""),
+                                                          ("Café – Ünïcode 100 日本", ""), ("Drift", "")]
+
+
+def test_queue_titles_that_are_not_the_proxy_file_name_are_left_alone(tmp_path):
+    from sonos_cli import remote
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    proxy = f"http://127.0.0.1:8737/remote/TOKEN/{remote.display_name('Tideway', 'audio/mpeg')}"
+    rows = [("Tideway.mp3", "", "http://127.0.0.1:8737/media/abc/Tideway.mp3"),     # a local file is not a proxy URL
+            ("Tideway.mp3", "", "http://127.0.0.1:8737/remote/Tideway.mp3"),         # a proxy URL without a name segment
+            ("Tide way", "", proxy),                                                    # the speaker has its own title
+            ("Tideway.mp3", "Someone", proxy)]                                          # tags came with an artist
+    for t, a, u in rows:
+        system.lounge.add_to_queue(_s1_item(t, a, u))
+    items = client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["items"]
+    assert [i["title"] for i in items] == ["Tideway.mp3", "Tideway.mp3", "Tide way", "Tideway.mp3"]
+
+
+@pytest.mark.parametrize("title,mime", [("Tideway", "audio/mpeg"), ("Tideway by SHTL", "audio/mpeg"), ("a.b.c", "audio/mp4"), ("x" * 300, "audio/mpeg"), ("", "audio/mpeg"), ("///", "audio/aac")])
+def test_queue_title_inverts_display_name_for_any_title(title, mime):
+    from sonos_cli import remote
+    name = remote.display_name(title, mime)
+    from urllib.parse import unquote
+    got = remote.queue_title(f"http://h:1/remote/T/{name}", unquote(name), "")
+    assert got == unquote(name).rsplit(".", 1)[0] and not got.endswith((".mp3", ".m4a", ".aac"))

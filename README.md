@@ -105,8 +105,8 @@ room that speaker belongs to (and skips discovery without the service); `$SONOS_
 ## Send a web page's audio
 
 `sonos send <url>` (or `POST /api/send`) finds the audio a page offers (a Faircamp release page gives its MP3 tracks with their
-titles; any other page gives its `<audio>` sources and links to MP3, AAC, FLAC and Ogg Vorbis) and queues it on the room. S1
-players can't fetch `https://` addresses, so each track is queued as `http://<this Mac>:8737/remote/<signed token>` and the service
+titles and the release's artist; any other page gives its `<audio>` sources and links to MP3, AAC, FLAC and Ogg Vorbis) and queues it on the room. S1
+players can't fetch `https://` addresses, so each track is queued as `http://<this Mac>:8737/remote/<signed token>/<title>.mp3` (the title and, for a Faircamp release, `by <artist>`, because the speaker labels a track it hasn't read yet from that last part) and the service
 fetches the real file when the speaker asks, so it must stay running while the room plays. It only ever fetches addresses it
 signed itself, and only public internet addresses: loopback, your LAN and other private ranges are refused.
 

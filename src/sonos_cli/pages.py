@@ -1,6 +1,6 @@
 """Find the audio a web page offers, in a form a Sonos S1 can play (FR13).
 
-Faircamp release pages come first: one entry per track, the MP3 source with the track's title, in order. Any other
+Faircamp release pages come first: one entry per track, the MP3 source with the track's title and the release's artist, in order. Any other
 page yields its `<audio>`/`<source>` URLs and its links to .mp3/.m4a/.aac/.flac/.ogg. Opus and anything else S1 can't
 play is skipped. URLs are made absolute and percent-encoded.
 """
@@ -8,12 +8,13 @@ play is skipped. URLs are made absolute and percent-encoded.
 from __future__ import annotations
 
 import posixpath
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 MAX_HTML_BYTES = 5_000_000
 MAX_TRACKS = 500
+MAX_ARTIST = 200
 
 MIME_BY_EXT = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac", ".ogg": "audio/ogg"}
 # In the order we'd rather play a page's alternatives.
@@ -30,6 +31,7 @@ class PageTrack:
     url: str
     title: str
     mime: str
+    artist: str = ""                                        # Faircamp's release artist(s); empty when the page names none
 
     @property
     def protocol_info(self) -> str:
@@ -94,6 +96,9 @@ class _Collector(HTMLParser):
         self._track_depth: list[int] = []
         self._depth = 0
         self._base_set = False
+        self.release_artist = ""
+        self._artist_depth = 0                              # the div depth of an open <div class="release_artists">, else 0
+        self._artist_text = ""
 
     # ---- events -------------------------------------------------------------------------------------------
     def handle_starttag(self, tag, attrs):
@@ -106,6 +111,8 @@ class _Collector(HTMLParser):
             self.base = absolute_url(a["href"], self.base) or self.base
         if tag == "div":
             self._depth += 1
+            if "release_artists" in classes and not self.release_artist and not self._artist_depth:
+                self._artist_depth, self._artist_text = self._depth, ""
             if "track" in classes:
                 self._track_depth.append(self._depth)
                 self._seen_faircamp_track = True
@@ -135,6 +142,9 @@ class _Collector(HTMLParser):
                 self._finish_audio()
             if self._track_depth and self._track_depth[-1] == self._depth:
                 self._track_depth.pop()
+            if self._artist_depth and self._artist_depth == self._depth:
+                self.release_artist = " ".join(self._artist_text.split())[:MAX_ARTIST]
+                self._artist_depth = 0
             self._depth -= 1
         if tag == "a":
             self._capturing_title = False
@@ -147,6 +157,8 @@ class _Collector(HTMLParser):
     def handle_data(self, data):
         if self._in_title:
             self.page_title += data
+        if self._artist_depth:
+            self._artist_text += data
         if self._capturing_title:
             self._pending_title += data
         if self._link is not None:
@@ -189,7 +201,10 @@ def extract(html: str, base_url: str) -> tuple[str, list[PageTrack]]:
     c.feed(html)
     c.close()
     c.flush()
-    tracks = c.faircamp or _dedupe(c.audio + c.links)
+    if c.faircamp and c.release_artist:
+        tracks = [replace(t, artist=c.release_artist) for t in c.faircamp]
+    else:
+        tracks = c.faircamp or _dedupe(c.audio + c.links)
     if not tracks:
         raise NoAudio("No audio Sonos can play was found on that page (it needs MP3, AAC, FLAC or Ogg Vorbis links)")
     return " ".join(c.page_title.split()), tracks[:MAX_TRACKS]

@@ -93,3 +93,43 @@ def test_a_track_title_is_used_once_not_repeated_on_a_second_audio_in_the_same_t
     html = '<div class="track"><a class="title">Title</a><audio src="a.mp3"></audio><audio src="b-side.mp3"></audio></div>'
     _, tracks = extract(html, "http://h.test/")
     assert [t.title for t in tracks] == ["Title", "b-side"]
+
+
+# ---- the release's artist --------------------------------------------------------------------------------------
+
+def test_every_track_of_a_faircamp_release_carries_the_releases_artist():
+    _, tracks = extract((FIX / "shtl-hello-ep.html").read_text(encoding="utf-8"), RELEASE)
+    assert [t.artist for t in tracks] == ["Minim", "Minim"]
+
+
+def _release(artists_html):
+    return (f'<html><head><title>R</title></head><body><div class="abstract"><h1>R</h1>{artists_html}</div>'
+            '<div class="tracks"><div class="track"><a class="title" href="1/">One</a><audio><source type="audio/mpeg" src="1/a.mp3"></audio></div></div></body></html>')
+
+
+@pytest.mark.parametrize("markup,artist", [
+    ('<div class="release_artists"><a href="../a/">SHTL</a></div>', "SHTL"),
+    ('<div class="release_artists"><a href="../a/">Ann</a>, <a href="../b/">Bo &amp; Co</a></div>', "Ann, Bo & Co"),
+    ('<div class="release_artists">\n  <span><a href="../a/"> Spaced\n out </a></span>\n</div>', "Spaced out"),
+    ('<div class="release_artists"></div>', ""),
+    ('', ""),
+])
+def test_the_release_artist_is_the_text_of_the_release_artists_div_and_empty_when_there_is_none(markup, artist):
+    _, tracks = extract(_release(markup), RELEASE)
+    assert [t.artist for t in tracks] == [artist]
+
+
+def test_text_after_the_release_artists_div_is_not_part_of_the_artist():
+    _, tracks = extract(_release('<div class="release_artists"><div>Inner</div><a>X</a></div><p>Not me</p>'), RELEASE)
+    assert tracks[0].artist == "InnerX"
+
+
+def test_pages_that_are_not_faircamp_releases_get_no_artist():
+    html = '<div class="release_artists">Someone</div><audio src="/a.mp3"></audio><a href="b.flac">b</a>'
+    _, tracks = extract(html, "https://example.com/")
+    assert [t.artist for t in tracks] == ["", ""]
+
+
+def test_a_very_long_release_artist_is_cut_to_the_cap_so_it_cannot_be_repeated_in_every_track_in_full():
+    _, tracks = extract(_release(f'<div class="release_artists"><a>{"A" * 5000}</a></div>'), RELEASE)
+    assert tracks[0].artist == "A" * pages.MAX_ARTIST and pages.MAX_ARTIST == 200

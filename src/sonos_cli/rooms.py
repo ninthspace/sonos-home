@@ -5,7 +5,10 @@ Requests only read the cache, and the cache lock is never held across a SoCo cal
 
 - Discovery runs at start-up and every `discovery_interval` seconds (and on demand), and polls each group once.
 - Between discoveries a room is polled every `poll_interval` seconds only while a client is watching it
-  (it asked for the room's state within `watch_seconds`) or while the room is playing something of ours.
+  (it asked for the room's state within `watch_seconds`) or while the room is playing something of ours. A room that is
+  doing nothing (stopped, or not answering) is polled only every `idle_poll_interval` seconds: each poll is several SOAP calls,
+  and an idle room watched by a UI tab at the playing rate cost the service more than 1 % of a core (NFR). A command's own
+  refresh still reads the room at once.
 - Rooms are identified by UID; a changed IP or name is picked up under the same UID.
 """
 
@@ -15,7 +18,8 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 OURS_PATHS = ("/media/", "/live/", "/remote/")
 ACTIVE_STATES = {"PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"}
@@ -74,13 +78,15 @@ class Room:
 class RoomMonitor:
     def __init__(self, discover: Callable[[], Iterable], *, our_hosts: Callable[[], Iterable[str]] | None = None,
                  our_port: int = 8737, clock: Callable[[], float] = time.monotonic, poll_interval: float = 2.0,
-                 discovery_interval: float = 60.0, watch_seconds: float = 10.0):
+                 discovery_interval: float = 60.0, watch_seconds: float = 10.0, idle_poll_interval: float = 6.0):
         self.discover = discover
         self.our_hosts = our_hosts or (lambda: ())
         self.our_port = our_port
         self.clock = clock
         self.poll_interval = poll_interval
         self.discovery_interval = discovery_interval
+        self.idle_poll_interval = idle_poll_interval
+        self._polled_at: dict[str, float] = {}        # group coordinator uid -> when it was last read (any reason)
         self.watch_seconds = watch_seconds
         self._rooms: dict[str, Room] = {}
         self._devices: dict[str, object] = {}
@@ -254,6 +260,7 @@ class RoomMonitor:
             with self._lock:
                 lock = self._poll_locks.setdefault(uid, threading.Lock())
             with lock:
+                self._polled_at[uid] = self.clock()
                 result = self._poll_group(uid)
             if not isinstance(result, _Moved):
                 return result
@@ -273,7 +280,7 @@ class RoomMonitor:
                        for m in sorted(group.members, key=lambda m: m.ip_address)]
             state = {
                 "state": transport.get("current_transport_state"),
-                "track": {"title": track.get("title", ""), "artist": track.get("artist", ""),
+                "track": {"title": track_title(track), "artist": track.get("artist", ""),
                           "album": track.get("album", ""), "uri": track.get("uri", ""),
                           "index": _index(track.get("playlist_position"))},
                 "position": track.get("position"), "duration": track.get("duration"),
@@ -342,6 +349,13 @@ class RoomMonitor:
         st = self._states.get(coordinator_uid) or {}
         return st.get("source") == "ours" and st.get("state") in ACTIVE_STATES
 
+    def _idle_and_recent(self, coordinator_uid: str, now: float) -> bool:
+        """True for a room that isn't playing or paused (or is unreachable) and was read less than `idle_poll_interval` ago."""
+        st = self._states.get(coordinator_uid)
+        if st is None or (st.get("reachable") is not False and st.get("state") in ACTIVE_STATES):
+            return False                                          # not read yet, or busy: keep the normal rate
+        return now - self._polled_at.get(coordinator_uid, -1e9) < self.idle_poll_interval
+
     def tick(self) -> None:
         """One scheduler step: discovery if it is due (or a group change asked for one), else poll what needs it."""
         now = self.clock()
@@ -355,7 +369,7 @@ class RoomMonitor:
         with self._lock:
             pinned = {self._rooms[u].coordinator_uid for u in self._pinned if u in self._rooms}
             targets = [u for u in {r.coordinator_uid for r in self._rooms.values() if r.online}
-                       if u in pinned or self._should_poll(u, now)]
+                       if u in pinned or (self._should_poll(u, now) and not self._idle_and_recent(u, now))]
         for uid in targets:
             self.poll_group(uid)
 
@@ -380,6 +394,33 @@ class RoomMonitor:
             except Exception:
                 pass                              # a bad network moment must not kill the monitor
             self._stop.wait(min(self.poll_interval, 1.0))
+
+
+_DC_TITLE = "{http://purl.org/dc/elements/1.1/}title"
+
+
+def track_title(track: dict) -> str:
+    """The current track's title. SoCo's `get_current_track_info` drops a metadata title that also appears in the track's URI
+    (`_title_in_uri`), and our proxy URLs end in the title (`…/Tideway%20by%20SHTL.mp3`), so a page track's title came back
+    empty even though the speaker reported it. When SoCo's title is empty, take `dc:title` from the metadata itself, except
+    for a radio-style stream (no duration, where SoCo's radio parsing decides) or a title that is a URL or the URL's file name."""
+    title = track.get("title") or ""
+    if title or track.get("duration") in (None, "", "0:00:00", "NOT_IMPLEMENTED"):
+        return title
+    metadata = track.get("metadata") or ""
+    if not metadata or metadata == "NOT_IMPLEMENTED":
+        return title
+    try:
+        found = ElementTree.fromstring(metadata.encode("utf-8") if isinstance(metadata, str) else metadata).findtext(f".//{_DC_TITLE}")
+    except (ElementTree.ParseError, ValueError):
+        return title
+    found = (found or "").strip()
+    if not found or "://" in found:
+        return ""
+    # A track with no title tag reports its URL's last segment as its title (`Halyard by SHTL.mp3`): SoCo blanks that on
+    # purpose, and so do we, so the UI falls back to the queue's cleaned label.
+    name = unquote(urlsplit(track.get("uri") or "").path.rsplit("/", 1)[-1])
+    return "" if found == name else found
 
 
 class _Moved:

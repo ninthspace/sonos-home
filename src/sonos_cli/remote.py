@@ -19,7 +19,7 @@ import secrets
 import socket
 from pathlib import Path
 from typing import Callable, Iterable
-from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 
 import anyio
 import httpx
@@ -95,6 +95,26 @@ def display_name(title: str, mime: str) -> str:
     while stem and len(quote(stem + ext, safe="")) > 240:
         stem = stem[:max(0, len(stem) - max(1, (len(quote(stem + ext, safe="")) - 240) // 12))]       # at most 12 encoded characters per character
     return quote((stem.rstrip() or "track") + ext, safe="")
+
+
+def queue_title(uri: str, title: str, artist: str) -> str:
+    """The title to show for a queue item. S1 players read a file's tags only for the track playing and the next one; every
+    other track of a page comes back titled by the last part of its proxy URL (`Tideway.mp3`) with no artist. That fallback is
+    turned back into the name we gave the URL (`display_name`'s name, decoded, without the extension: the page's title, or
+    `Title by Artist` when it named an artist). A title the speaker took from
+    tags, or any item that isn't one of our /remote/ URLs, is left alone."""
+    if artist:
+        return title
+    parts = urlsplit(uri).path.split("/")
+    if len(parts) != 4 or parts[1] != "remote" or not parts[3]:
+        return title
+    name = unquote(parts[3])
+    if title != name:
+        return title
+    for ext in _EXT.values():
+        if name.lower().endswith(ext) and len(name) > len(ext):
+            return name[:-len(ext)]
+    return title
 
 
 def is_public(ip: str) -> bool:

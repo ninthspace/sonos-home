@@ -69,6 +69,8 @@
 **Status**: Complete  
 **Blocked by**: Story 1  
 **Satisfies**: FR13  
+**Amended**: the Evidence's closing remark that the current-track title stays empty because the file's own tags win was at least partly SoCo's `_title_in_uri` blanking a title that appears in our URL; the service now reads it from the speaker's metadata (2026-11-03) — cited: docs/quick/03-quick-track-title-from-metadata.md  
+**Amended**: the proxy URL now ends `/remote/<token>/Title by Artist.mp3` when the page names an artist (Faircamp's `release_artists`), so the Evidence below, which shows `Halyard.mp3` and queue titles `Halyard`/`Undertow` for the pre-change code, no longer matches new sends; the queue panel turns the name back into `Title by Artist` (2026-11-03) — cited: docs/quick/02-quick-queue-labels-and-artist.md, FR13  
 **Audit**: pass after fixes (2026-11-03), 2 rounds: round 1 (Warning: the test accepted 502 and didn't pin that the name never reaches the origin; Suggestions on the log, a byte cap and ZWJ sequences) and round 2 (Warnings: a quadratic trim on a huge link text, a stale red and a missing red in the Evidence) fixed; no Critical, so the second audit was the last.  
 **Signal**: speaker-metadata-differs-from-what-we-send — project — the speaker ignores the DIDL title and titles a track from the URL's last segment, found only on the real Office (Story 3; give a live check a title/metadata assertion, not just PLAYING and position)  
 **Signal**: unbounded-text-into-loop — project — display_name's trim loop was quadratic in the length of link text a page controls (Story 3; cap any loop over text from a remote page)  

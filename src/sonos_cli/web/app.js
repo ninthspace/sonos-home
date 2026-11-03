@@ -192,7 +192,7 @@ function renderPlayer() {
     $("np-meta").textContent = state.unreachable ? "Waiting for the service to answer." : "Pick a room and a file.";
   } else {
     const t = n.track || {};
-    const shown = t.title || queueTitle(t.index);      // a file's own tags win on the speaker; a page's tracks may have none: use the queue's title
+    const shown = t.title || queueTitle(t.index);      // a track with no title tag reports none (the service drops its URL file name): use the queue's cleaned label
     $("np-title").textContent = shown || (n.state === "STOPPED" ? "Nothing playing" : "Playing");
     if (shown && shown !== lastAnnounced) { lastAnnounced = shown; $("announce").textContent = `Now playing ${shown}`; }
     const parts = [sourceLabel(n.source), n.state === "PLAYING" ? "playing" : n.state === "PAUSED_PLAYBACK" ? "paused" : "stopped"];

@@ -7,6 +7,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from fakes import FakeSoCo, FakeSystem
+from sonos_cli.rooms import track_title
 from sonos_cli import config, player, rooms, service
 from sonos_cli.library import Library
 from sonos_cli.media import AudioInfo, Track
@@ -247,6 +248,62 @@ def test_a_room_playing_ours_is_polled_without_a_watcher_and_one_playing_somethi
     assert after["Bedroom192.168.0.31"] == base["Bedroom192.168.0.31"]
 
 
+K = "Kitchen192.168.0.29"
+
+
+def test_a_watched_room_that_is_doing_nothing_is_read_every_idle_interval_not_every_poll_interval(system, monitor, clock):
+    monitor.refresh_group_of(system.kitchen.uid)                # a client watches Kitchen; it is stopped
+    assert monitor.idle_poll_interval > monitor.poll_interval
+    base = reads(system)[K]
+    for _ in range(int(monitor.idle_poll_interval // monitor.poll_interval) - 1):
+        clock.advance(monitor.poll_interval)
+        monitor.tick()
+        monitor.state(system.kitchen.uid)                       # the client keeps asking
+    assert reads(system)[K] == base                             # still inside the idle interval: not read
+    clock.advance(monitor.poll_interval)
+    monitor.tick()
+    assert reads(system)[K] > base                              # the idle interval has passed: read
+    again = reads(system)[K]
+    monitor.refresh_group_of(system.kitchen.uid)                # a command's own refresh is never held back
+    assert reads(system)[K] > again
+
+
+def test_a_watched_room_that_is_playing_is_still_read_every_poll_interval(system, monitor, clock):
+    play_url(system.lounge, f"http://{OUR_IP}:8737/media/abc/a.flac")
+    monitor.refresh_group_of(system.lounge.uid)
+    for _ in range(3):
+        before = reads(system)["Lounge192.168.0.26"]
+        clock.advance(monitor.poll_interval)
+        monitor.tick()
+        assert reads(system)["Lounge192.168.0.26"] > before
+
+
+def test_a_watched_room_playing_something_else_is_also_read_every_poll_interval(system, monitor, clock):
+    system.bedroom.play_uri("x-sonos-vli:abc")                  # Spotify-style source: not ours, but the room is busy
+    monitor.refresh_group_of(system.bedroom.uid)
+    assert monitor.state(system.bedroom.uid)["state"] == "PLAYING" and monitor.state(system.bedroom.uid)["source"] != "ours"
+    before = reads(system)["Bedroom192.168.0.31"]
+    clock.advance(monitor.poll_interval)
+    monitor.tick()
+    assert reads(system)["Bedroom192.168.0.31"] > before
+
+
+def test_a_watched_room_that_stops_answering_is_retried_every_idle_interval_even_if_it_was_playing(system, monitor, clock, monkeypatch):
+    play_url(system.lounge, f"http://{OUR_IP}:8737/media/abc/a.flac")
+    monitor.refresh_group_of(system.lounge.uid)
+    calls = []
+    monkeypatch.setattr(FakeSoCo, "get_current_transport_info", lambda self: (calls.append(self.player_name), (_ for _ in ()).throw(OSError("timeout")))[1])
+    monitor.refresh_group_of(system.lounge.uid)                 # the failure: PLAYING is kept, flagged unreachable
+    assert monitor.state(system.lounge.uid)["reachable"] is False and monitor.state(system.lounge.uid)["state"] == "PLAYING"
+    n = len(calls)
+    clock.advance(monitor.poll_interval)
+    monitor.tick()
+    assert len(calls) == n                                      # not hammered at the playing rate
+    clock.advance(monitor.idle_poll_interval)
+    monitor.tick()
+    assert len(calls) > n                                       # but retried
+
+
 def test_subscribers_hear_about_changes_only(system, monitor, clock):
     seen = []
     monitor.subscribe(lambda uid, old, new: seen.append((uid, old["state"] if old else None, new["state"])))
@@ -350,7 +407,7 @@ def test_a_coordinator_that_leaves_its_group_makes_the_monitor_rediscover_soon(s
     assert monitor.room(system.kitchen.uid).coordinator_uid == system.lounge.uid
     system.lounge.unjoin()                                           # Kitchen takes over as coordinator
     monitor.state(system.lounge.uid)
-    clock.advance(2)
+    clock.advance(monitor.idle_poll_interval)                        # a stopped room is read at the idle rate
     monitor.tick()                                                   # polls Lounge, sees Kitchen is no longer with it
     clock.advance(0.1)
     monitor.tick()                                                   # ... and rediscovers, well before 60 s
@@ -511,3 +568,57 @@ def test_a_live_stream_is_ours_in_both_forms_a_real_speaker_reports_its_uri():
     assert classify_source(f"x-rincon-mp3radio://http://other.example:8737/live/abc123.mp3", hosts, 8737) == "other-host:other.example"
     assert classify_source(f"x-rincon-mp3radio://http://{OUR_IP}:8737/elsewhere/abc.mp3", hosts, 8737) == "other"
     assert classify_source("x-rincon-mp3radio://http://", hosts, 8737) == "other"
+
+
+# ---- the track title when SoCo drops it (docs/quick/03-quick-track-title-from-metadata.md) -------------------------
+
+
+OFFICE_URI = ("http://192.168.0.204:8737/remote/aHR0cHM6Ly9zaHRsLWV4cGVyaW1lbnQuY29tL2ZvcmVzaG9yZS8zL21wMy12NS8xSkRfek5UUHpJYy8wMyUyMFNIVEwlMjAtJTIwVGlkZXdheS5tcDM"
+              ".SBYQ1zdFWsaAcVBb5VMjIgjw5l91aCMfVZdjIXu3H70/Tideway%20by%20SHTL.mp3")
+
+
+def didl(title, uri=OFFICE_URI, duration="0:06:18"):
+    """The DIDL Office returned on 2026-11-03 while playing Foreshore track 3, with the title and URI swappable."""
+    return ('<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            f'<item id="-1" parentID="-1" restricted="true"><res protocolInfo="http-get:*:audio/mpeg:*" duration="{duration}">{uri}</res>'
+            f'<r:streamContent></r:streamContent><dc:title>{title}</dc:title><upnp:class>object.item.audioItem.musicTrack</upnp:class>'
+            '<dc:creator>SHTL</dc:creator><upnp:album>Foreshore</upnp:album><upnp:originalTrackNumber>3</upnp:originalTrackNumber>'
+            '<r:albumArtist>SHTL</r:albumArtist></item></DIDL-Lite>')
+
+
+def office_track(**over):
+    t = {"title": "", "artist": "SHTL", "album": "Foreshore", "uri": OFFICE_URI, "position": "0:02:30", "duration": "0:06:18",
+         "playlist_position": "3", "metadata": didl("Tideway")}
+    t.update(over)
+    return t
+
+
+def test_an_empty_soco_title_is_taken_from_the_metadata_for_page_tracks_and_local_files():
+    assert track_title(office_track()) == "Tideway"
+    local = f"http://{OUR_IP}:8737/media/abc/Tideway.flac"
+    assert track_title(office_track(uri=local, metadata=didl("Tideway", uri=local))) == "Tideway"
+
+
+def test_the_metadata_title_reaches_the_room_state(system, monitor, monkeypatch):
+    play_url(system.lounge, OFFICE_URI)
+    monkeypatch.setattr(FakeSoCo, "get_current_track_info", lambda self: office_track())
+    assert monitor.refresh_group_of(system.lounge.uid)["track"]["title"] == "Tideway"
+
+
+@pytest.mark.parametrize("over,expected", [
+    ({"title": "From SoCo"}, "From SoCo"),                                       # SoCo's title is kept
+    ({"duration": "0:00:00"}, ""),                                                # radio-style stream
+    ({"duration": ""}, ""),
+    ({"duration": None}, ""),
+    ({"metadata": didl("http://192.168.0.204:8737/live/x.mp3")}, ""),             # a URL is not a title
+    ({"metadata": ""}, ""),
+    ({"metadata": "NOT_IMPLEMENTED"}, ""),
+    ({"metadata": "<DIDL-Lite><item><dc:title>broken"}, ""),                       # not valid XML: no error
+    ({"metadata": didl("")}, ""),
+    ({"metadata": didl("Tideway by SHTL.mp3"), "artist": ""}, ""),               # no title tag: the URL's file name
+    ({"uri": f"http://{OUR_IP}:8737/media/abc/a%20b.flac", "metadata": didl("a b.flac", uri=f"http://{OUR_IP}:8737/media/abc/a%20b.flac")}, ""),
+    ({}, "Tideway"),                                                              # control: same fixture, fallback used
+])
+def test_the_metadata_fallback_is_used_only_where_it_should_be(over, expected):
+    assert track_title(office_track(**over)) == expected
