@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "sonos tab capture spike",
+  "version": "0.0.1",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "activeTab",
+    "tabs"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Stream tab"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlWA9HKtJgldLSnFC++LTo6Fu9xp7b81gU9QJpHXmAbUmPbFWX/QCtHna8ZmmnB5THGNMr9SFhnsjdMzEyrfCI8A4wrjewvBurDlC+/A5zbY44QQ2CjZKAoGEo3kElori8FLrjcqW/T34J/rx20GB0S4e9QwEFXf8MSfE0/PTUSPBIipcmjB6Gebug+/JJC1vGY7oe5cQA41+3kufXF6uLe20JoO0FhDUbU7z0JDtpZphlfqpqPAQnqJyXiKl54f+T2+KuB4ZwnalIdE62fzqdf0eFk7Sk/Rt6v5ThYLLC0EPIkNMYe5b3O/TEFW7Sp0OOFXG1EzZDVNbjb7gu2HW/wIDAQAB"
+}

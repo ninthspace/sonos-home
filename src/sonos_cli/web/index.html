@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonos at home</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="banner" role="alert" hidden>The service is unreachable. Check that <code>sonos service run</code> is going on this Mac.</div>
+
+<header class="top">
+  <h1>Sonos at home</h1>
+  <div class="views" role="group" aria-label="View">
+    <button id="view-music" type="button" aria-pressed="true">Music</button>
+    <button id="view-playlists" type="button" aria-pressed="false">Playlists</button>
+    <button id="view-web" type="button" aria-pressed="false">Web page</button>
+    <button id="view-rooms" type="button" aria-pressed="false">Rooms</button>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="rooms" aria-label="Rooms">
+    <ul id="room-list"></ul>
+    <section class="queue" aria-label="Queue">
+      <div class="queue-head">
+        <h2>Queue</h2>
+        <button id="clear-queue" type="button" class="quiet" hidden>Clear</button>
+      </div>
+      <ol id="queue-list"></ol>
+      <p id="queue-note" class="note"></p>
+    </section>
+  </nav>
+
+  <main>
+
+    <section id="rooms-panel" aria-label="Manage rooms" hidden>
+      <div class="actions rooms-actions">
+        <button id="group-all" type="button" class="quiet">Group all rooms</button>
+      </div>
+      <ul id="rooms-manage" class="listing manage"></ul>
+      <p id="rooms-note" class="note" role="status"></p>
+    </section>
+
+    <section id="web-panel" aria-label="Web page" hidden>
+      <form id="send-form" class="send" novalidate>
+        <label for="send-url">Page address</label>
+        <div class="inline">
+          <input id="send-url" type="url" inputmode="url" placeholder="https://shtl-experiment.com/hello-ep/" autocomplete="off" spellcheck="false">
+          <button id="send-play" type="submit">Play on this room</button>
+          <button id="send-add" type="button" class="quiet">Add to queue</button>
+        </div>
+        <p class="hint">The service finds the MP3, AAC, FLAC and Ogg Vorbis links on the page and queues them. It must keep running while the room plays.</p>
+      </form>
+      <p id="send-note" class="note" role="status"></p>
+      <ol id="send-tracks" class="listing tracks"></ol>
+    </section>
+
+    <section id="playlists-panel" aria-label="Playlists" hidden>
+      <div id="pl-index">
+        <form id="pl-new" class="inline">
+          <label class="sr" for="pl-new-name">New playlist name</label>
+          <input id="pl-new-name" type="text" placeholder="New playlist name" autocomplete="off" maxlength="120">
+          <button type="submit">Create</button>
+        </form>
+        <ul id="pl-list" class="listing"></ul>
+        <p id="pl-index-note" class="note" role="status"></p>
+      </div>
+      <div id="pl-editor" hidden>
+        <header class="where">
+          <button id="pl-back" type="button" class="quiet">All playlists</button>
+          <h2 id="pl-title" tabindex="-1"></h2>
+        </header>
+        <div class="actions pl-actions">
+          <button id="pl-play" type="button">Play on this room</button>
+          <button id="pl-queue" type="button" class="quiet">Add to queue</button>
+          <button id="pl-rename" type="button" class="quiet">Rename</button>
+          <button id="pl-delete" type="button" class="quiet">Delete</button>
+        </div>
+        <form id="pl-rename-form" class="inline" hidden>
+          <label class="sr" for="pl-rename-name">New name</label>
+          <input id="pl-rename-name" type="text" autocomplete="off" maxlength="120">
+          <button type="submit">Save name</button>
+          <button id="pl-rename-cancel" type="button" class="quiet">Cancel</button>
+        </form>
+        <ol id="pl-tracks" class="listing tracks"></ol>
+        <p id="pl-note" class="note" role="status"></p>
+      </div>
+    </section>
+
+    <div id="music-panel">
+    <header class="where">
+      <button id="up" type="button" aria-label="Up one folder" hidden>↑</button>
+      <ol id="crumbs" aria-label="Folder"></ol>
+    </header>
+
+    <div class="bar">
+      <label class="filter">
+        <span class="sr">Filter this folder</span>
+        <input id="filter" type="search" placeholder="Filter this folder" autocomplete="off">
+      </label>
+      <div id="folder-actions" class="actions" hidden>
+        <button id="play-folder" type="button">Play folder</button>
+        <button id="append-folder" type="button" class="quiet">Add folder to queue</button>
+        <button id="folder-to-playlist" type="button" class="quiet">Add folder to playlist</button>
+      </div>
+    </div>
+
+    <section id="empty" class="empty" hidden>
+      <h2>No music folders yet</h2>
+      <p id="empty-message"></p>
+      <p>Add one to <code id="config-path"></code>, then restart the service:</p>
+      <pre id="config-example">music_folders = ["~/Dropbox/Music"]</pre>
+    </section>
+
+    <ul id="listing" class="listing"></ul>
+    <p id="listing-note" class="note" role="status"></p>
+    <button id="more" type="button" class="quiet" hidden>Show more</button>
+    </div>
+  </main>
+</div>
+
+<dialog id="picker" aria-labelledby="picker-title">
+  <form method="dialog" class="picker-body">
+    <h2 id="picker-title">Add to playlist</h2>
+    <p id="picker-what" class="note"></p>
+    <ul id="picker-list"></ul>
+    <div class="inline">
+      <label class="sr" for="picker-new">New playlist name</label>
+      <input id="picker-new" type="text" placeholder="Or start a new playlist" autocomplete="off" maxlength="120">
+      <button id="picker-create" type="button">Create and add</button>
+    </div>
+    <p id="picker-note" class="note" role="status"></p>
+    <button type="submit" value="cancel" class="quiet">Cancel</button>
+  </form>
+</dialog>
+
+<p id="announce" class="sr" aria-live="polite"></p>
+<footer class="player" aria-label="Now playing">
+  <div class="track">
+    <p id="np-title" class="title">Nothing playing</p>
+    <p id="np-meta" class="meta">Pick a room and a file.</p>
+  </div>
+  <div class="transport">
+    <button id="prev" type="button" aria-label="Previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM20 5v14L9.5 12z"/></svg></button>
+    <button id="toggle" type="button" aria-label="Play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z"/></svg></button>
+    <button id="next" type="button" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM4 5l10.5 7L4 19z"/></svg></button>
+  </div>
+  <div class="deck">
+    <div id="progress" class="progress" role="progressbar" aria-label="Position in the track" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+    <label class="fader">
+      <input id="volume" type="range" min="0" max="100" value="0">
+      <output id="volume-out">–</output>
+    </label>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

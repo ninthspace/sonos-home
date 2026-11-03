@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sonos at home</title>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<h1>Sonos at home</h1>
+
+<label for="room">Room</label>
+<select id="room" disabled><option>Looking for rooms…</option></select>
+
+<label id="local-row" class="check"><input id="local" type="checkbox"> Also play here</label>
+
+<div id="actions">
+  <button id="checking" type="button" class="quiet" disabled hidden>Checking…</button>
+  <button id="send" type="button" hidden>Send page</button>
+  <button id="stream" type="button" class="quiet" hidden>Stream tab</button>
+  <button id="stop" type="button" hidden>Stop</button>
+</div>
+
+<p id="found" role="status"></p>
+<p id="note" role="status"></p>
+
+<script src="popup.js"></script>
+</body>
+</html>

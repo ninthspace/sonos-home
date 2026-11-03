@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Sonos at home",
+  "version": "0.1.0",
+  "description": "Send a web page's audio to a Sonos room, or stream this tab, through the Sonos service on this Mac.",
+  "minimum_chrome_version": "116",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8737/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Sonos at home",
+    "default_popup": "popup.html"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlWA9HKtJgldLSnFC++LTo6Fu9xp7b81gU9QJpHXmAbUmPbFWX/QCtHna8ZmmnB5THGNMr9SFhnsjdMzEyrfCI8A4wrjewvBurDlC+/A5zbY44QQ2CjZKAoGEo3kElori8FLrjcqW/T34J/rx20GB0S4e9QwEFXf8MSfE0/PTUSPBIipcmjB6Gebug+/JJC1vGY7oe5cQA41+3kufXF6uLe20JoO0FhDUbU7z0JDtpZphlfqpqPAQnqJyXiKl54f+T2+KuB4ZwnalIdE62fzqdf0eFk7Sk/Rt6v5ThYLLC0EPIkNMYe5b3O/TEFW7Sp0OOFXG1EzZDVNbjb7gu2HW/wIDAQAB"
+}

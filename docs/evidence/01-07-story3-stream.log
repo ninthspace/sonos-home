@@ -1,0 +1,53 @@
+# 01-07 Story 3: Stream tab through the harness (2026-11-03), tests/extension_harness/stream_driver.py (after audit round 2)
+# Chrome 156 (branded, throwaway profile), the UNMODIFIED extension/ (permissions below), fake-rooms service on :8737 with this extension's ID in extension_ids, a 440 Hz tone page on 127.0.0.1:8798 (http://127.0.0.1:8798/tone.html; plain.html for the pages without audio). The listener reads /live/<id>.mp3 over a raw socket; the tone is measured with ffmpeg (zero crossings). A stream id counts only if it is new and /live/<id>.mp3 answers. Scenarios 5 and 6 pause the service with SIGSTOP while a start is pending. A level of null (nothing captured) is printed as null.
+
+OBS browser: Chrome/156.0.8078.80
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS manifest permissions (unmodified): ["tabCapture","offscreen","storage","activeTab","scripting"]["http://localhost:8737/*"]
+OBS 1 buttons on the tone page: ["Stream tab"]
+OBS 1 popup note after Stream tab: Streaming this tab to Kitchen.
+OBS 1 Kitchen reports our stream: True
+OBS 1 the room's URI starts: x-rincon-mp3radio://192.168.0.204:8737
+OBS 1 listener head: HTTP/1.0 200 OK
+OBS 1 tone at first listen (Hz, ffmpeg stderr): (440.0, '')
+OBS 1 after 8 s with the popup closed and the tab in the background: bytes: 172800
+OBS 1 tone then (Hz, ffmpeg stderr): (440.0, '')
+OBS 1 Kitchen state: PLAYING
+OBS 2a buttons while streaming: ["Stream tab","Stop"]
+OBS 2a note while streaming: Streaming a tab to Kitchen.
+OBS 2a seconds from Stop to /live/<id>.mp3 answering 404: 0.0
+OBS 2a Kitchen state after Stop: STOPPED
+OBS 2a popup note about 0.2 s after Stop was clicked: You stopped the stream (stop).
+OBS 2a popup note when reopened: You stopped the stream (stop).
+OBS 2b the stream was answering just before the tab was closed: True
+OBS 2b seconds from closing the tab to 404: 0.2
+OBS 2b popup note on another page: The tab was closed (tab-closed).
+OBS 3 also play here off: the stream is answering: True
+OBS 3 also play here off: level on the local branch (RMS, 5 readings; null would mean nothing is captured): [0, 0, 0, 0, 0]
+OBS 3 also play here on: the stream is answering: True
+OBS 3 also play here on: level on the local branch (RMS, 5 readings; null would mean nothing is captured): [0.2113, 0.2128, 0.2125, 0.2127, 0.2112]
+OBS 3b the stream is answering: True
+OBS 3b off at the start: [0, 0, 0, 0, 0]
+OBS 3b ticked while streaming: [0.2119, 0.213, 0.2116, 0.213, 0.2117]
+OBS 3b the stream is still answering: True
+OBS 3b unticked while streaming: [0, 0, 0, 0, 0]
+OBS 4 buttons on the second tone tab while the first streams: ["Stream tab","Stop"]
+OBS 4 seconds until the first stream was gone: 0.2
+OBS 4 sessions answering: first, second: [False, True]
+OBS 4 Kitchen state, Lounge state: ['STOPPED', 'PLAYING']
+OBS 4 second stream tone (Hz, ffmpeg stderr): (440.0, '')
+OBS 5 service paused by SIGSTOP (pids ['81796', '81806']): a request times out: True
+OBS 5 popup note while the start is pending: Starting…
+OBS 5 the still-open popup's note once the service answered: None
+OBS 5 the worker's stored state afterwards: {"stream":{"last":{"at":1793716071912,"reason":"tab-closed","room":"RINCON_347E5C4251C401400","tabId":1265090440},"streaming":false}}
+OBS 5 popup note afterwards: The tab was closed (tab-closed).
+OBS 5 buttons afterwards (no Stop: nothing is streaming): ["Stream tab"]
+OBS 5 Kitchen state: STOPPED
+OBS 5 streams still answering: []
+OBS 6a Stop while the start is pending: the reply to Stop: {"ok":true}
+OBS 6a Stop while the start is pending: seconds Stop took to be answered: 0.0
+OBS 6a Stop while the start is pending: the worker's state about 1 s after Stop (service still paused): {"stream":{"last":{"at":1793716084167,"reason":"stop","room":"RINCON_347E5C4251C401400","tabId":1265090443},"streaming":false}}
+OBS 6a Stop while the start is pending: Kitchen state / streams answering after the service resumed: ['STOPPED', False]
+OBS 6b Also play here ticked while the start is pending: the stream is answering: True
+OBS 6b Also play here ticked while the start is pending: level on the local branch: [0.2126, 0.2124, 0.2128, 0.2122, 0.2113]
+service log: /var/folders/26/vjvp9s655c357908ss43dw6h0000gn/T/sonos-stream-cfg-0mwp6mdw/service.log

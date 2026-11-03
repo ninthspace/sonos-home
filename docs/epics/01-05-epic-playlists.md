@@ -2,41 +2,49 @@
 
 **Source spec**: docs/specifications/01-spec-sonos-home-player.md  
 **Date**: 2026-11-02  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Epic 01-02-epic-service-core
 
 ## Playlist storage and API
 **Story**: 1  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR12
+**Satisfies**: FR12  
+**Audit**: pass after fixes (2026-11-03), three rounds: round 1 and 2 findings fixed (casefolded ids, atomic rename, locked readers, line-break and Unicode-separator handling, vanished files); round 3 Critical (a rename onto a file the index hides replaced it) fixed with a `samefile` guard, test and red, and no fourth audit per the rules. Suggestion left: an external writer racing the sub-millisecond gap between the existence check and the rename/replace could still overwrite (exclusive create would close it); our own threads cannot, the store lock covers them.
+**Signal**: file-store-overwrite-via-aliasing — project — two files that share one playlist id (`AC:DC` and `AC_DC`) let a rename or create replace a file the index hid; three audit rounds (Story 1; any store keyed by a derived name must refuse to touch an existing file that isn't the one it holds)  
 
 **Acceptance Criteria**:
 
 - Creating, renaming, deleting, adding, removing and reordering tracks via `/api/playlists` writes UTF-8 `.m3u8` files with `#EXTM3U` and absolute paths. A playlist with a track named `Café – Ünïcode 日本.wav` reads back identically after the app restarts. `[unit]`
+  - Evidence: tests/test_playlists.py::test_every_edit_writes_a_utf8_m3u8_with_extm3u_and_absolute_paths, ::test_a_playlist_with_a_non_ascii_track_reads_back_identically_after_a_restart (`Café – Ünïcode 日本.wav`, a new store object as the restart), ::test_plain_m3u_files_from_other_apps_are_read_and_become_m3u8_on_first_edit, ::test_a_failed_write_leaves_the_old_file_intact_and_no_temp_files, ::test_duplicates_and_bad_indexes_are_refused_and_change_nothing, ::test_the_api_creates_edits_lists_and_deletes, ::test_bad_requests_get_json_errors_and_change_nothing, ::test_a_duplicate_name_is_a_409, ::test_a_name_that_gets_cut_to_the_length_limit_still_works, ::test_playlists_written_by_other_apps_with_awkward_names_are_listed_and_usable (`AC:DC.m3u`, an NFD name, `Mix.M3U`, a trailing space), ::test_two_quick_edits_to_one_playlist_both_land (20 threaded adds; adds racing a rename), ::test_line_break_characters_in_titles_or_paths_cannot_inject_or_split_entries (8 characters), ::test_files_from_other_apps_are_split_only_on_real_line_ends, ::test_a_file_with_a_line_break_in_its_name_is_skipped_by_the_add_api_with_a_reason, ::test_a_rename_that_only_changes_capitalisation_is_allowed, ::test_names_that_differ_only_in_capitalisation_are_one_playlist_and_never_overwrite_each_other, ::test_an_m3u_and_an_m3u8_of_the_same_name_in_different_case_do_not_destroy_each_other, ::test_editing_then_deleting_an_uppercase_m3u_removes_it_for_good, ::test_a_failed_rename_leaves_the_playlist_exactly_where_it_was, ::test_converting_a_plain_m3u_by_renaming_it_keeps_its_tracks, ::test_other_separators_are_ordinary_filename_characters_and_never_split_an_entry, ::test_the_characters_that_end_a_line_in_titles_or_paths_cannot_inject_or_split_entries, ::test_reading_a_playlist_that_vanishes_is_a_not_found_not_a_crash, ::test_renaming_a_playlist_onto_a_name_a_hidden_file_already_holds_is_refused (`AC:DC.m3u8` beside `AC_DC.m3u8`: the shown one renamed onto its own id), ::test_a_change_of_capitalisation_alone_is_still_allowed (full suite 464 passed) — red: 'Failed: DID NOT RAISE Exists' with the duplicate check comparing case-sensitively (create) or removed (rename onto another playlist); "assert ['mix','Mix'] == ['Mix']" with ids not casefolded; "assert ['Mix.M3U','Mix.m3u8'] == ['Mix.m3u8']" with the .m3u suffix test case-sensitive; 'Failed: DID NOT RAISE OSError' with the rename not performed as one rename; "assert (['New.m3u8','Old.m3u'] == ['New.m3u8']" with the old .m3u not removed after conversion; 'PlaylistError: …has a line break in its name' with every Unicode separator treated as a line end; 'FileNotFoundError' escaping with the vanished-file handling removed; "assert ('xxxx… ' == 'xxxx…')" with the trailing-space strip after the length cut removed; "assert ['AC:DC','Ca…','Trailing '] == ['AC_DC','Ca…','Trailing']" with ids taken from raw file stems; 'assert 13 == 20' with the store lock removed; 'Failed: DID NOT RAISE PlaylistError' with the line-break check removed; "assert [] == ['First','b']" with bare CR not treated as a line end; 'assert (2 == 1)' with `splitlines()` splitting on Unicode separators; 'assert (400 == 200)' with line-break files not skipped on add; "assert ([] == ['Road Trip']" with the capitalisation-only rename branch removed; "assert '' == '#EXTM3U\\n'" with the header not written; "assert ['b','c','a'] == ['c','a','b']" with reorder inserting at the wrong end; 'assert [\'/private/va…/a.wav\'] == […]' with the file written in latin-1; "assert (True and not True)" with a plain .m3u left behind after an edit; "assert (b'' == b'#EXTM3U\\n#E…')" with a half-written target before the swap; 'Failed: DID NOT RAISE Exists' with a rename onto an existing name allowed; 'Failed: DID NOT RAISE Exists' with the target-file `samefile` guard in rename removed (playlists.py rename); 'IndexError' with the index range check removed; 'assert (405 == 200)' with the action route removed; 'AssertionError: {"added":1,"total":2,…}' with folders not expanded/guarded on add (playlists.py, service.py)
 - A playlist name such as `../../x` or `a/b` is stored under a safe filename inside the playlists directory. No file is created outside it, which the test checks by listing the parent directory. `[unit]`
+  - Evidence: tests/test_playlists.py::test_any_name_is_stored_under_a_safe_filename_inside_the_playlists_directory (13 names: `../../x`, `a/b`, `..`, `/etc/passwd`, a NUL, a backslash, 400 characters, blank, … — the parent folder's listing is compared before and after), ::test_lookups_by_an_unsafe_id_are_not_found_never_a_path (a real `secret.m3u8` beside the playlists folder stays untouched) — red: 'assert (0 == 1)' with the safe-name step removed (names written as given); 'Failed: DID NOT RAISE NotFound' with the id check removed (playlists.py safe_id/_file)
 - Playing a playlist containing a deleted file and an entry `/etc/hosts` queues only the remaining tracks, and reports both as unavailable. With the guard removed, `/etc/hosts` is queued (control). `[unit]`
+  - Evidence: tests/test_playlists.py::test_playing_skips_a_deleted_file_and_an_entry_outside_the_music_folders_and_reports_both (a deleted file and `/etc/hosts`: queued [a, b], both reported unavailable with index and reason), ::test_control_with_the_guard_removed_an_entry_outside_the_music_folders_is_queued (guarded: 422 and nothing queued; with Library.guard and music_root_of removed, the outside `x.wav` is queued — `/etc/hosts` itself is also refused as 'not an audio file', so that control uses an outside audio file), ::test_an_entry_outside_the_music_folders_with_a_music_extension_is_unavailable_in_the_listing, ::test_an_audio_file_in_the_playlists_or_cache_folder_is_not_playable_from_a_playlist, ::test_a_playlist_with_nothing_playable_is_a_422_and_leaves_the_queue_alone — red: 'AssertionError: {"error":"No such file or folder: …/gone.wav"}' with unavailable entries passed to play; 'assert [(1,\'file no…\'),…] == [(1,…),(2,\'not an audio file\')]' with the audio-extension check removed; "assert (422 == 422 and 'Nothing in this playlist' in 'Nothing playable: no audio files found')" with the empty check removed; 'assert True is False' with the music-folder check removed (playlists.py _check, service.py play action)
 
 ### Store and routes
 **Task**: 1.1  
 **Description**: `src/sonos_cli/playlists.py` and routes; reading tolerates plain `.m3u` written by other apps.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## Playlists in the UI
 **Story**: 2  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 1, Epic 01-03-epic-web-ui  
-**Satisfies**: FR12
+**Satisfies**: FR12  
+**Audit**: pass after fixes (2026-11-03), 2 rounds: round 1 (5 Warnings: double-click data loss, Enter in the picker cancelling, stale play label, Delete staying armed, truncation unreported) and round 2 (2 Warnings: Delete armed and confirmed by one double click, the picker's create-and-add racing the in-flight lock) all fixed and re-checked in Chrome; no Critical, so the second audit was the last.  
+**Signal**: double-submit-unguarded — project — destructive UI actions (Remove, Delete, move, add) ran twice on a double click and shifted row indexes (Story 2; give any action that changes a list by position an in-flight guard from the start)  
 
 **Acceptance Criteria**:
 
 - In Chrome against fake rooms: create a playlist, add two files from the browser, reorder them, play it on Kitchen (the fake queue matches the order), rename it, then delete it. Each step shows in the playlist panel. `[browser]`
+  - Evidence: browser-observed at http://localhost:8761/ in Chrome (Slate; `sonos service run --fake-rooms --port 8761` with a one-folder config): Playlists → typed `Evening` → Create opened an empty editor; Music → music → Hello EP → Playlist on `01 Intro.wav` → Evening, then the same on `02 Outro.wav`; Playlists showed "Evening, 2 tracks"; with Kitchen selected, the editor listed 01 Intro, 02 Outro and moving 02 Outro up made it row 1; Play on Kitchen showed "Playing 2 tracks on Kitchen." and the service's Kitchen queue was ["02 Outro", "01 Intro"], current 0, the Queue panel the same; Rename → `Late evening` showed "Renamed to Late evening." and the new title; Delete asked "Press Delete for good…", the second press gave "Playlist deleted." and an empty list (GET /api/playlists → []). At 375 px (a 375 px frame) the editor wrapped with no horizontal overflow (scrollWidth 373 = clientWidth 373); a clean reload plus the flow logged no console errors. — red: n/a — browser-observed After audit round 1 (re-run in Chrome on the same fake service): a double click on Remove deleted one track (`[02 Outro, t001]` left of three), a double click on ↓ moved one track once; choosing another room with the editor open changed the button from "Play on Kitchen" to "Play on Bedroom"; Delete then Rename left the button as "Delete" (disarmed) and focus on the title; in the Add-to-playlist dialog typing a new name and pressing Enter created the playlist and added the file ("Added 1 track to Via enter."); a clean reload logged no console errors. — red: n/a — browser-observed After audit round 2: a double click on Delete left the playlist in place and armed ("Delete for good"), a deliberate second press 0.7 s later deleted it; double-firing Create and add made one playlist holding the one file, with the picker closed; no console errors. — red: n/a — browser-observed
 
 ### Playlist panel
 **Task**: 2.1  
 **Description**: Playlist list and editor in the UI; "Add to playlist" on browse rows.  
-**Status**: Pending
+**Status**: Complete
 
 ---

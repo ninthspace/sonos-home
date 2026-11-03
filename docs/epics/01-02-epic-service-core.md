@@ -2,171 +2,211 @@
 
 **Source spec**: docs/specifications/01-spec-sonos-home-player.md  
 **Date**: 2026-11-02  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —
 
 ## Configuration
 **Story**: 1  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR3
+**Satisfies**: FR3  
+**Audit**: pass (2026-11-03), 4 findings fixed (the last round's two fixes are covered by tests and were not audited a third time)
 
 **Acceptance Criteria**:
 
 - With no config file, a partial file and an invalid TOML file, loading gives the defaults (no music folders; port 8737; room `Office`), the merged values, and an error naming the file and line, respectively. With no config file, the music-folder list is empty even when `~/Dropbox` and `~/Music` exist. `[unit]`
+  - Evidence: tests/test_config.py::test_no_file_gives_defaults, ::test_no_file_means_no_music_folders_even_when_dropbox_and_music_exist, ::test_partial_file_merges_with_defaults, ::test_invalid_toml_error_names_file_and_line, ::test_wrong_types_are_errors_naming_the_key — red: 'assert (PosixPath(\'/Users/chris/Dropbox\'),) == ()' with the missing-file default changed to ~/Dropbox; 'assert 1234 == 9000' with port forced to 1234; 'assert <path> in bad' with the TOML error message replaced by 'bad' (all config.py load); an invalid config.toml is reported by the CLI as `sonos: <file>: … (at line N …)` and exit 1 (::test_config_error_is_a_value_error_so_the_cli_reports_it) — red: 'assert False = \'…\'.startswith(\'sonos: \')' with the CLI's message prefix removed (cli.py main); an unusable music_folders entry (`~nosuchuser/m`, an embedded NUL, a symlink loop) is a ConfigError naming the file, not a traceback (::test_unusable_music_folder_entries_are_config_errors_naming_the_file, ::test_symlink_loop_in_music_folders_is_a_config_error) — red: `RuntimeError: Could not determine home directory.` escaping `pytest.raises(ConfigError)` with the wrapping `except` narrowed to KeyError (config.py load); the isolation fixture neither reads nor reloads the real config on teardown (::test_an_invalid_real_config_does_not_break_the_suite, full suite 63 passed) — red: `AssertionError … ERROR tests/test_media.py::test_parse_range[…] - sonos_cli…ConfigError` with teardown back on `monkeypatch.undo(); config.reload()` (tests/conftest.py)
 - A music folder given as a symlink is stored as its `realpath` target. `[unit]`
-- ffmpeg/ffprobe are resolved from the config path, then `PATH`, then `/opt/homebrew/bin`, then `/usr/local/bin`. With `PATH` emptied and a fake binary placed in a stand-in for `/opt/homebrew/bin`, that binary is found. `[unit]`
+  - Evidence: tests/test_config.py::test_symlinked_music_folder_is_stored_as_its_target, ::test_relative_music_folder_is_resolved_against_the_config_file — red: 'assert (…/Dropbox,) == (…/real,)' with .resolve() changed to .absolute(); 'assert (…/sonos/tunes,) == (…/tunes,)' with relative folders resolved against the working directory (config.py load)
+- ffmpeg/ffprobe are resolved from the config path, then `PATH`, then `/opt/homebrew/bin`, then `/usr/local/bin` (epic 01-09 Story 2 inserted the copy bundled with the package between the config path and `PATH`). With `PATH` emptied and a fake binary placed in a stand-in for `/opt/homebrew/bin`, and no bundled copy, that binary is found. `[unit]`
+  - Evidence: tests/test_config.py::test_binary_found_in_fallback_dir_when_path_is_empty, ::test_binary_lookup_order_config_then_bundled_then_path_then_fallbacks (renamed, see the Amended line below), ::test_media_probe_and_convert_run_the_resolved_binaries (full suite 49 passed) — red: 'assert None == …/homebrew-bin/ffmpeg' with the fallback-dir loop emptied (config.py find_binary); 'assert [\'ffprobe\', …] == [<configured paths>]' with media.probe back on the bare name, and 'assert […, \'ffmpeg\'] == […]' with media.convert back on the bare name (media.py)
 
 ### Config module
 **Task**: 1.1  
 **Description**: `src/sonos_cli/config.py` with `tomllib`, dataclass defaults, binary resolution; `media.py` uses the resolved paths.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## Fake Sonos system and live-test helper
 **Story**: 2  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR18
+**Satisfies**: FR18  
+**Audit**: pass (2026-11-03), 6 findings fixed (the last round's fixes are covered by tests and were not audited a third time)
 
 **Acceptance Criteria**:
 
 - `tests/fakes.py` provides a fake system with the five rooms. Office is a coordinator plus an invisible satellite. Each fake room has a queue, transport state, position, volume, mute, group membership and a settable `uri`, and is usable anywhere a `soco.SoCo` is. `[unit]`
+  - Evidence: tests/test_fakes.py (the implementation is src/sonos_cli/fakes.py so `--fake-rooms` can use it; tests/fakes.py re-exports it): ::test_five_rooms_with_office_as_coordinator_plus_invisible_satellite, ::test_each_room_has_queue_transport_position_volume_mute_group_and_settable_uri (set_source), ::test_a_group_member_reports_x_rincon_and_follows_the_coordinators_transport, ::test_partymode_joins_every_visible_room_and_the_satellite_moves_with_its_partner, ::test_join_then_unjoin_takes_the_satellite_back_with_its_partner, ::test_a_coordinator_that_leaves_regroups_its_followers, ::test_transport_and_queue_edits_on_a_group_member_raise_like_soco_and_queues_are_per_device, ::test_leaving_a_group_forgets_the_old_source_and_volume_is_clamped, ::test_seek_by_position_and_by_track_like_soco, ::test_the_fake_works_wherever_soco_does_player_and_cli (full suite 96 passed) — red: 'assert (not True) … is_visible' with the satellite made visible; 'assert {Kitchen,…} == {Lounge,…}' with partymode's satellite sync removed; 'assert <Office> is <Lounge>' with join not moving the satellite; 'assert {Lounge,…Kitchen} == {Lounge}' with a leaving coordinator not regrouping; 'Failed: DID NOT RAISE SoCoSlaveException' with the coordinator check disabled (also for add_to_queue and clear_queue alone); 'Failed: DID NOT RAISE ValueError' with seek() accepting no arguments, and 'Regex pattern did not match' with the HH:MM:SS check disabled; "assert 'http://h/a.flac' is None" with join keeping the old source; 'assert 150 == 100' with the volume clamp removed; 'assert (0 == 1)' with queue_size reading the coordinator's queue; "assert '1' == '3'" with seek(track=) not moving; 'assert None == x-rincon:…' with the member uri removed; "assert 'STOPPED' == 'PAUSED_PLAYBACK'" with pause() leaving the room STOPPED (src/sonos_cli/fakes.py)
 - `tests/live.py`'s helper restores every member's volume and mute when the fake's restore raises `SoCoUPnPException` with error 402, and reports "source not restored". With the separate `finally` for volume and mute removed, the same test fails (control). `[unit]`
+  - Evidence: tests/test_fakes.py::test_restore_failure_402_still_restores_every_members_volume_and_mute, ::test_without_the_separate_volume_and_mute_step_the_same_check_fails (the control: the same check raises AssertionError when restore_all is the naive sequential version), ::test_playback_is_stopped_before_anything_is_unmuted, ::test_helper_restores_normally_when_the_source_restores, ::test_helper_restores_when_the_body_raises, ::test_a_failing_member_does_not_stop_the_others_being_restored (both members refuse the unmute; both are reported and both volumes still come back) — red: 'assert False = any(… "source not restored" …)' with the report removed; 'SoCoUPnPException: UPnP Error 402' escaping with volume/mute restore after snapshot.restore; "ValueError: 'stop' is not in list" with stop_playback dropped from restore_all; 'SoCoUPnPException: fake: unmute refused' escaping with the per-member mute try/except removed; 'assert False' with the failed-stop report removed (::test_a_stop_that_fails_is_reported_not_swallowed) (tests/live.py)
 
 ### Fakes and helper
 **Task**: 2.1  
 **Description**: Fake classes mirroring the SoCo attributes used in `player.py`/`cli.py`; context-manager live helper wrapping `soco.snapshot.Snapshot`.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## Service skeleton with stable media URLs, path guard and origin hardening
 **Story**: 3  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 1  
 **Satisfies**: FR1, FR6, FR7, NFR6, AD1, AD7  
-**Effort**: high
+**Effort**: high  
+**Audit**: pass (2026-11-03), 2 findings fixed
 
 **Acceptance Criteria**:
 
 - `sonos service run` (and `--fake-rooms`) starts a Starlette app on the configured port, on all interfaces. `/api/health` returns 200 from `127.0.0.1` and from the LAN address, with `ffmpeg`, `rooms_seen`, host and port. `[integration]`
+  - Evidence: tests/test_service.py::test_health_answers_from_loopback_and_from_the_lan_address (a real uvicorn on port 0 bound to all interfaces; answers on 127.0.0.1 and the Mac's LAN address with ffmpeg, rooms_seen, host and the actual port); also run by hand: `uv run sonos service run --fake-rooms -p 8751` answered /api/health with rooms_seen 4 on 127.0.0.1 and 192.168.0.204 — red: 'assert (4 == 4 and \'127.0.0.1\' == \'127.0.0.1\' …' with the port reported from cfg instead of the socket; 'assert (0 == 4)' with rooms_seen hard-wired to 0 (service.py health)
 - `/api/health` reports `ffmpeg: missing` when the configured ffmpeg path doesn't exist. `[integration]`
+  - Evidence: tests/test_service.py::test_health_reports_ffmpeg_missing_when_the_configured_path_does_not_exist (control: ::test_health_reports_ffmpeg_ok_when_it_can_be_found) — red: "assert 'ok' == 'missing'" with the status hard-wired to ok (service.py health)
 - `/media/<root-id>/<path>` serves files with correct MIME, `Accept-Ranges` and 206 responses. A file needing conversion is converted on first fetch and served as 16-bit FLAC. A URL built before an app restart returns 200 with the same bytes after it. `[integration]`
+  - Evidence: tests/test_service.py::test_media_serves_files_with_mime_accept_ranges_and_206, ::test_hires_file_is_converted_on_first_fetch_and_served_as_16bit_flac, ::test_a_url_built_before_a_restart_serves_the_same_bytes_after_it (a new Library and app), ::test_unknown_and_missing_files, ::test_odd_media_paths_get_a_clean_4xx_never_a_500, ::test_media_failures_are_clean_responses_that_do_not_leak_paths (415 without the path, 503 with ffprobe missing, 502 when ffmpeg fails) — red: "KeyError: 'accept-ranges'" with FileResponse replaced by a plain Response; "assert b'RIFF' == b'fLaC'" with conversion skipped; "assert b'unknown music folder' == b'RIFF…'" with root ids salted by time; 'OSError: [Errno 63] File name too long' escaping with the OSError catch removed; 'assert (415 == 415 and \'/private/va…/music\' not in …notaudio.wav' with the 415 body carrying the path; 'assert 500 == 503' with the ffprobe-missing status changed (service.py MediaServer.handle, library.py root_id)
 - These are refused with 403: `/etc/hosts`, `<music>/../secret.txt`, `..%2f` and `%252e%252e%252f` traversal, a symlink inside the root pointing outside it, and the sibling-prefix path `<music>2/x.wav`. With the guard removed, the same requests succeed (control). `[integration]`
+  - Evidence: tests/test_service.py::test_paths_outside_the_music_folder_are_refused_with_403 (/etc/hosts, ..%2f, the symlink out of the root, the sibling-prefix path), ::test_has_traversal_sees_dot_dot_through_any_number_of_encodings, ::test_resolve_media_refuses_encoded_traversal_before_touching_the_filesystem, ::test_double_encoded_traversal_is_refused_by_a_real_server_too (%252e%252e%252f, via a live server because the test client decodes it twice), ::test_guard_alone_refuses_a_sibling_whose_name_starts_with_the_root_name, ::test_a_playlist_name_and_an_m3u_entry_outside_the_roots_are_refused_by_the_guard; control: ::test_with_the_guard_removed_the_same_requests_are_served (200 for /etc/hosts, ..%2fsecret.txt, the symlink and the sibling; the double-encoded name reaches the filesystem and isn't 403) — red: 'AssertionError: absolute /etc/hosts' with the guard accepting everything; 'AssertionError: ../x' with the traversal check disabled; 'Failed: DID NOT RAISE PathNotAllowed' with is_relative_to replaced by a string prefix test (library.py); the sibling prefix also end to end in its absolute form (::test_the_sibling_prefix_path_is_refused_end_to_end_in_its_absolute_form)
 - Through a music root configured as a symlink to the real folder, a file inside is served with 200 and the right bytes. So is `Café – Ünïcode 日本.wav`, requested in both NFC and NFD form. `[integration]`
+  - Evidence: tests/test_service.py::test_a_music_root_that_is_a_symlink_serves_its_files (config.load of a symlinked folder, asked for through the link and directly), ::test_a_library_built_on_a_symlinked_root_serves_through_either_path, ::test_unicode_names_are_served_requested_in_nfc_and_in_nfd (Café – Ünïcode 日本.wav, 200 with the right bytes both ways) — red: "assert (PosixPath('/…/link'),) == (PosixPath('/…/real'),)" with Library.create using absolute() instead of resolve() (library.py)
 - These are refused: a request with a forged `Host`, a POST with a foreign `Origin`, a WebSocket upgrade with a foreign `Origin`, and a `text/plain` POST. A media GET with no `Origin` is accepted. With the checks removed, the refused requests are accepted (control). `[integration]`
+  - Evidence: tests/test_service.py::test_a_forged_host_is_refused, ::test_malformed_host_values_are_refused, ::test_well_formed_allowed_hosts_are_accepted, ::test_duplicate_host_or_origin_headers_are_refused_whichever_order_they_come_in (live server, raw sockets; control: one Host header is 200), ::test_an_address_the_mac_acquires_after_start_up_is_accepted_but_a_stranger_is_not, ::test_post_with_a_foreign_origin_is_refused_and_our_own_is_accepted, ::test_text_plain_post_is_refused, ::test_json_content_type_must_match_exactly_not_by_prefix, ::test_websocket_upgrade_with_a_foreign_origin_is_refused, ::test_the_configured_extension_id_is_accepted_and_another_is_refused, ::test_media_get_without_an_origin_is_accepted; control ::test_with_the_checks_removed_the_refused_requests_are_accepted — red: 'assert 200 == 403' with the Host check removed, with the Origin check removed, with the Content-Type check removed, with the exact media-type compare replaced by a prefix test, with the numeric-port rule removed and with any chrome-extension origin accepted; "AssertionError: ['GET /api/health HTTP/1.1', 'Host: 127.0.0.1:…', 'Host: evil.com', …]" with the duplicate-header refusal disabled; 'assert 403 == 200' with the late-address refresh disabled and 'assert 3 == 2' with names also triggering a refresh; 'ClosedResourceError' with websockets exempt from the Origin check; 'assert (403 == 200)' with GET counted as state-changing (service.py Hardening)
 
 ### Library module
 **Task**: 3.1  
 **Description**: `src/sonos_cli/library.py`: resolved roots, `root-id`, guard (`realpath` + `is_relative_to` + NFC), stable URL build/parse.  
-**Status**: Pending
+**Status**: Complete
 
 ### App and middleware
 **Task**: 3.2  
 **Description**: `src/sonos_cli/service.py`: Starlette app, health and media routes, Host/Origin/Content-Type middleware, `service run` subcommand.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## RoomMonitor and rooms API
 **Story**: 4  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 2  
-**Satisfies**: FR4, NFR5, AD8
+**Satisfies**: FR4, NFR5, AD8  
+**Audit**: pass (2026-11-03), 7 findings fixed (the last round's fixes are covered by tests and were not audited a third time)  
+**Amended**: moved the unplug-and-replug criterion to epic 01-08 Story 6, where the plan keeps `[user]` checks, because it needs someone at the speakers and left here it would keep Stories 5–8 and the UI epics blocked (2026-11-03) — cited: plan rule that no other epic waits on a `[user]` criterion; spec NFR5
+**Signal**: user-criterion-in-build-story — project — a hardware-only `[manual]` criterion sat in a story other work depends on (Story 4 criterion 4; tag such criteria `[user]` and put them in the user-checks epic)
 
 **Acceptance Criteria**:
 
 - `/api/rooms` matches a stubbed discovery of the fake system: UIDs, names, coordinator, model, members, state, volume, mute. It is served from cache, and the test fails if SoCo is called during the request. `[unit]`
+  - Evidence: tests/test_rooms.py::test_api_rooms_matches_the_discovered_system_and_is_served_from_cache (UIDs, names, coordinator, model, members incl. the invisible satellite, state, volume, mute; a tripwire on every SoCo read proves the request never calls SoCo), ::test_the_tripwire_does_catch_soco_calls (control: a refresh trips it) — red: 'AssertionError: assert {\'name\': \'Off…\'} == {…}' with volume reported as 0; 'AssertionError: SoCo was called' with the state read calling the device (rooms.py RoomMonitor.rooms/state). Also run by hand: `sonos service run -p 8752` on the real network listed Bedroom, Lounge and Office (with its .27 satellite hidden), rooms_seen 3, and returned Bedroom's state (the hand run is a note, not evidence for this criterion)
 - After the fake changes a room's IP, and separately renames it, a refresh shows the new IP and name under the same UID within one discovery cycle (60 s, driven by a fake clock). `[unit]`
-- `GET /api/rooms/{uid}/state` returns cached transport state, track, position and a `source` of `ours`, `other-host:<host>` or `other` (AD7). Polling runs only for rooms that a client is watching or that are playing ours. `[unit]`
-- On the real network, with the service running from the terminal, Office is unplugged and replugged. `/api/rooms` shows it again within 60 s with no restart. `[manual]`
+  - Evidence: tests/test_rooms.py::test_changed_ip_and_a_rename_are_picked_up_under_the_same_uid_within_one_discovery_cycle (fake clock: unchanged at 59 s, new IP and name at 60 s, same UID), ::test_a_room_that_disappears_is_marked_offline_and_comes_back_when_it_is_seen_again, ::test_an_empty_discovery_marks_rooms_offline_but_keeps_their_last_known_details, ::test_the_thread_discovers_keeps_going_and_stops, ::test_a_discovery_that_raises_is_retried_later_and_polling_goes_on, ::test_requests_are_not_blocked_while_a_discovery_is_talking_to_the_speakers — red: 'AssertionError: a request waited for the discovery' with the refresh holding the cache lock across its SoCo calls; 'assert (10 == 2 or 10 == 3)' with a failed discovery not delaying the next attempt; "assert ('RINCON_347E…', '192.168.0.29', 'Kitchen') == (…'192.168.0.99', 'Den')" with a known room not being updated; "assert ('192.168.0.99', 'Den') == ('192.168.0.29', 'Kitchen')" with the cycle shortened to 30 s; 'assert (True is False)' with offline marking removed; "assert 'Kitchen' == 'Den'" with the thread's wait stretched to 100 s (rooms.py)
+- `GET /api/rooms/{uid}/state` returns cached transport state, track, position and a `source` of `ours`, `other-host:<host>` or `other` (AD7). A `/media/`, `/live/` and `/remote/` URL on this service's host and port are each `ours`; the same paths on another host's address are `other-host:<host>`. Polling runs only for rooms that a client is watching or that are playing ours. `[unit]`
+  - Evidence: tests/test_rooms.py::test_state_returns_cached_transport_state_track_position_and_source, ::test_source_classification (ours / other-host:<host> / other, incl. x-rincon-mp3radio, /remote/, Spotify, another port), ::test_a_group_member_reports_its_coordinators_state_and_the_x_rincon_uri_is_not_ours, ::test_unknown_room_is_404, ::test_classify_source_edge_cases, ::test_only_watched_rooms_or_rooms_playing_ours_are_polled, ::test_a_room_playing_ours_is_polled_without_a_watcher_and_one_playing_something_else_is_not, ::test_subscribers_hear_about_changes_only, ::test_a_speaker_that_stops_answering_keeps_its_last_state_flagged_unreachable, ::test_a_room_that_joins_another_group_is_seen_by_the_next_poll_not_the_next_discovery, ::test_a_coordinator_that_leaves_its_group_makes_the_monitor_rediscover_soon, ::test_two_polls_of_one_group_cannot_leave_the_older_reading_in_the_cache, ::test_a_group_that_could_not_be_read_yet_has_a_full_state_and_is_not_a_404, ::test_a_grouped_room_that_goes_offline_does_not_make_the_monitor_rediscover_forever, ::test_a_poll_whose_coordinator_answers_with_the_first_room_does_not_deadlock, ::test_a_failed_discovery_after_a_regroup_still_backs_off_for_ten_seconds, ::test_a_listed_room_that_has_not_been_polled_yet_gives_an_empty_state_not_a_404, ::test_a_room_whose_own_poll_fails_is_listed_offline_until_it_answers_again, ::test_classify_source_survives_urls_with_bad_ports_or_brackets (full suite 183 passed) — red: 'AssertionError: 142 discoveries in 200 s' with offline rooms counted when deciding to rediscover; 'AssertionError: poll_group deadlocked on its own lock' with the hop to another coordinator taken inside the first group\'s lock; 'AssertionError: 9 discovery attempts in 9 s' with a failed discovery leaving the rediscover flag set; "assert 'PLAYING' == 'PLAYING' and … source" with a polled member not following its new coordinator; "AssertionError: assert 'RINCON_000E…' == 'RINCON_347E…'" with a leaving coordinator not asking for rediscovery; "assert 'PLAYING' == 'PAUSED_PLAYBACK'" with polls of one group not serialised; 'assert (None is not None)' with an unpolled room giving None; "assert {'Bedroom': T…} == {'Kitchen': F…}" with a failed poll not marking the room offline; 'ValueError: Port out of range 0-65535' escaping classify_source; "assert 'other-host:radio.example.com' == 'other'" with the URL-shape check removed; "assert 'ours' == 'other-host:10.0.0.9'" with every http URL called ours; 'assert {Office…: 12, …} == {Office…: 2, …}' with every room polled every tick; 'assert 6 == 4' with the ours-only clause dropped; "assert [('RINCON_000…', 'STOPPED')] == []" with subscribers notified on every poll; 'assert (True is False)' with reachable not cleared (rooms.py)
 
 ### Monitor
 **Task**: 4.1  
 **Description**: `src/sonos_cli/rooms.py`: discovery thread, per-room poll loop, cache, change subscribers.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## Play and browse API
 **Story**: 5  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 3, Story 4  
-**Satisfies**: FR5, FR10, NFR1
+**Satisfies**: FR5, FR10, NFR1  
+**Audit**: pass (2026-11-03), 13 findings fixed (the last round's fix is covered by tests and was not audited a third time)
 
 **Acceptance Criteria**:
 
 - `POST /api/play` with a folder holding a 16-bit WAV, a 24-bit/96 k WAV, an MP3 and a fake dataless placeholder queues the three real tracks in name order on the fake coordinator, with stable URLs and the right MIME types. It skips the placeholder with a reason in the response. `[integration]`
+  - Evidence: tests/test_playback.py::test_a_mixed_folder_is_queued_in_name_order_with_mime_types_and_the_placeholder_skipped, ::test_the_placeholder_is_never_probed_or_opened, ::test_urls_are_the_stable_media_urls, ::test_folders_expand_in_case_insensitive_name_order_including_subfolders, ::test_unreadable_files_are_skipped_with_a_reason_and_the_rest_play, ::test_play_on_a_group_member_queues_on_the_coordinator, ::test_a_link_out_of_the_music_folder_is_skipped_with_a_reason_and_the_rest_play, ::test_a_link_out_that_sorts_first_does_not_wipe_the_queue_or_break_the_play, ::test_hidden_folders_are_not_played_just_as_browse_does_not_list_them, ::test_when_no_file_can_be_read_the_existing_queue_is_left_alone, ::test_a_speaker_error_is_a_502_not_a_crash, tests/test_play_api.py::test_a_speaker_error_through_the_api_is_json_502, ::test_a_play_after_a_regroup_the_monitor_has_not_noticed_goes_to_the_new_coordinator, ::test_playing_through_the_api_updates_the_monitors_cache_at_once, tests/test_play_api.py::test_play_a_mixed_folder_through_the_api_and_fetch_what_was_queued (POST /api/play, then fetching each queued URL through the app: wav, flac for the 24/96 file, mp3), ::test_play_via_a_group_member_queues_on_the_coordinator (full suite 216 passed) — red: "assert ['t00', 't01', …, 't05', …] == ['t00', 't01', …]" with an append no longer waiting for the in-flight play; 'assert (not True)' with an old play cancelled before the new one reaches the speaker; "assert ['a'] == ['a', 'c', 'd']" with the out-of-root link check removed; "assert ['z', 't', '.hid', 'a'] == ['a']" with hidden folders walked; "assert ([] == ['PREVIOUS']" with the queue cleared before the first track probes; "AssertionError: {\"error\":\"The speaker didn't take the request: … only be called/used on the coordinator …\"}" with the stale-coordinator re-read removed; "assert ['01-plain', …, '04-cloud'] == ['01-plain', …, '03-song']" with the placeholder check removed; "assert ['A', 'z', 'Z…'] == ['A', 'b', 'c…']" with casefolded name order replaced by plain order (playback.py expand/play)
 - The first track is queued and `play_from_queue(0)` called before the rest are probed: with ffprobe slowed by 1 s per file on a 10-file folder, play starts within 2 s. A folder over 500 tracks queues 500 and says so. `replace` clears the queue first and `append` does not. `[integration]`
+  - Evidence: tests/test_playback.py::test_the_first_track_plays_before_the_rest_are_probed (ffprobe stand-in slowed 1 s per file, 10 files: play returns in under 2 s with 1 queued and play_from_queue(0) called; all 10 queued in order afterwards), ::test_a_folder_over_500_tracks_queues_500_and_says_so, ::test_replace_clears_the_queue_first_and_append_does_not, ::test_a_new_play_cancels_the_previous_ones_background_queueing, ::test_a_new_play_cannot_be_followed_by_the_old_plays_batch, ::test_an_append_made_while_a_folder_is_still_queueing_goes_after_it_and_cuts_nothing_short, ::test_a_replace_that_fails_at_the_speaker_does_not_cancel_the_play_in_progress, ::test_two_plays_at_once_on_one_room_leave_one_copy_not_two, ::test_plays_through_two_members_of_one_group_cancel_each_other, ::test_shuffle_mixes_the_whole_selection_before_the_cap, tests/test_play_api.py::test_shuffle_must_be_a_boolean_and_an_unreadable_folder_is_json — red: 'assert 11.058… < 2' with the first track queued only after probing all of them; "assert None == {'limit': 500, 'found': 520}" with the note dropped and 'assert 520 == 500' with the cap removed; "assert (['old', 'a', 'b'] == ['b']" with replace not clearing; "assert (('play_from_queue', 1) not in [] and 'a' == 'old'" with append starting playback; "assert ['new', 'old0…', 'old05'] == ['new']" with the batch call no longer inside the room lock; "assert (500 == 500 and 't499' == 't519'" with the shuffle after the cap; 'assert 200 == 400' with a non-boolean shuffle accepted; "assert ['one', 't00'…] == ['one']" with cancellation keyed on the request's room instead of the group's coordinator; 'assert [\'t00\', …] == [\'t00\', …]' (a duplicated queue) with a new play not cancelling the old job; 'assert (False)' with a new play not cancelling the old job (playback.py Player.play)
 - `GET /api/browse?path=` lists folders then audio files by name, 200 per page, without opening any audio file. A test fails if `probe` or `open` is called on an audio file. On a generated 2,000-file folder, the first page returns in under 1 s, and play reaches `play_from_queue` within 3 s. `[integration]`
+  - Evidence: tests/test_playback.py::test_browse_lists_folders_before_files_by_name_without_opening_audio (probe, builtins.open, Path.open and read_bytes all fail the test if they touch an audio file), ::test_browse_pages_at_200_entries, ::test_browse_refuses_paths_outside_the_roots, ::test_an_unreadable_folder_is_a_clean_error (403 JSON, not a 500), ::test_a_2000_file_folder_lists_in_under_a_second_and_starts_playing_within_three (2,000 generated WAVs: first page and play_from_queue timed), tests/test_play_api.py::test_browse_through_the_api_pages_and_validates — red: "assert [('file','A.…'), … ('dir','z')] == [('dir','Y'), …]" with files listed before folders; 'AssertionError: opened audio file …/A.wav' with the listing opening each file; 'assert 450 == 200' with the page cap removed; 'assert ((…) < 1)' with the listing slowed 1.1 s and 'assert ((…) < 3)' with play delayed 3.1 s (playback.py browse/play)
 - With no music folders configured, `GET /api/browse` and `POST /api/play` return 409 with a message naming `config.toml`, and nothing is queued on the fake room. With one folder configured, the same requests succeed (control). `[integration]`
+  - Evidence: tests/test_playback.py::test_with_no_music_folders_browse_and_play_are_409_naming_the_config_and_nothing_is_queued, tests/test_play_api.py::test_with_no_music_folders_browse_and_play_are_409_naming_config_toml_and_nothing_is_queued (nothing queued, no call reached the fake room), control ::test_control_the_same_requests_succeed_once_a_folder_is_configured (both files); outside-folder paths give 403 naming config.toml (::test_an_outside_path_error_names_the_config_file); other bad requests 400/404/422 (tests/test_play_api.py::test_play_errors_have_the_right_status_and_queue_nothing, ::test_a_body_that_is_not_json_or_not_an_object_is_a_400) — red: 'Failed: DID NOT RAISE NoMusicFolders' with the no-folders check removed; 'assert (400 == 409)' with every error returned as 400; "AssertionError: {\"error\":\"Nothing playable: no audio files found\"}" with the request-shape validation removed (playback.py, service.py play_route)
 - On muted Office through `tests/live.py`, the median of 5 runs from an API play call on a native-format file to PLAYING is 3 s or less. `[manual]`
+  - Evidence: run on the real Office through tests/live.py's muted_room (both members muted, restored to 76/unmuted afterwards): a real service on port 8753 with a one-folder config, POST /api/play of a 128 kbps MP3, timed to the speaker reporting PLAYING, five runs: 0.58, 0.31, 0.29, 0.37, 0.32 s, median 0.32 s (limit 3 s). The script is scratchpad/nfr1/nfr1.py — red: n/a — manual
 
 ### Endpoints
 **Task**: 5.1  
 **Description**: Play and browse routes on the shared core; background probe/queue worker; dataless detection via `st_flags & SF_DATALESS`.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## Sleep prevention while our audio plays
 **Story**: 6  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 4  
-**Satisfies**: FR17
+**Satisfies**: FR17  
+**Audit**: pass (2026-11-03), 0 findings fixed (five suggestions were fixed anyway; covered by tests, not re-audited)  
+**Amended**: removed "a remote HTTPS URL" from the not-held cases, since FR13's `/remote/…` proxy URLs are served by this Mac and so are ours (2026-11-03) — cited: spec AD5 amendment, FR17
 
 **Acceptance Criteria**:
 
-- The service starts `caffeinate -i -w <pid>` while a room is PLAYING our URL, or PAUSED on it within the 30-minute grace period. It doesn't for another host's URL, a remote HTTPS URL, or a grouped member reporting `x-rincon:`. It stops caffeinate within 30 s of nothing of ours playing. With the release step removed, the assertion stays held (control). `[unit]`
+- The service starts `caffeinate -i -w <pid>` while a room is PLAYING our URL (a `/media/`, `/live/` or `/remote/` URL alike), or PAUSED on it within the 30-minute grace period. It doesn't for another host's URL or a grouped member reporting `x-rincon:`. It stops caffeinate within 30 s of nothing of ours playing. With the release step removed, the assertion stays held (control). `[unit]`
+  - Evidence: tests/test_sleep.py::test_held_while_a_room_plays_our_url_with_one_caffeinate_for_the_service, ::test_not_held_for_another_hosts_url_a_remote_url_a_spotify_source_or_a_stopped_room, ::test_a_grouped_member_does_not_count_for_itself, ::test_a_grouped_room_playing_ours_holds_the_assertion_once, ::test_held_while_paused_within_the_grace_period_and_released_after_it, ::test_resuming_after_a_long_pause_holds_again_and_restarts_the_grace_clock, ::test_released_within_30_seconds_of_stopped, ::test_released_when_the_room_is_switched_to_another_source, ::test_a_caffeinate_that_died_is_started_again, ::test_a_room_that_goes_offline_while_playing_ours_releases_the_assertion, ::test_stop_releases_and_the_thread_starts_and_stops, ::test_grace_period_comes_from_the_config, ::test_a_speaker_that_stopped_answering_no_longer_holds_the_assertion, ::test_nothing_new_is_started_once_the_manager_is_stopping, ::test_a_non_finite_or_absurd_grace_period_is_a_config_error (full suite 216 passed; grace is `pause_grace_minutes`, default 30); the release-step control is the first of the reds — red: 'assert (not True)' with the release step removed (stays held after STOPPED and after the grace period), and with the 'ours' source check removed (held for another host's URL, a remote URL and a grouped member); 'assert (True is False)' with the grace limit ignored; 'assert False is True' with the pause clock not reset on resume; 'assert (True is True and 1 == 2)' with a dead caffeinate not restarted; 'assert (2 == 1)' with a second caffeinate started per qualifying room; 'assert (False)' with stop() not releasing; 'assert 30.0 == 5.0' with the configured grace ignored; 'assert True is False' with an unreachable speaker still counted as playing; "assert [<test_sleep…>] == []" with a stopping manager still starting caffeinate; 'Failed: DID NOT RAISE ConfigError' with a non-finite grace accepted (sleep.py, config.py)
 - On muted Office, `pmset -g assertions` lists the service's caffeinate assertion while playing, and no longer lists it 30 s after stop. `[manual]`
+  - Evidence: run on the real Office through tests/live.py's muted_room: a real service (port 8756, one-folder config), POST /api/play of a 16-bit WAV, then `pmset -g assertions` filtered to the caffeinate whose command line is `caffeinate -i -w <the service's pid>`: before playing, none (`/api/health` sleep_assertion released); while PLAYING, /api/health `held` and pmset lists `pid 61314(caffeinate) … PreventUserIdleSystemSleep named: "caffeinate command-line tool"`, a child of the service; coord.stop(), and the assertion was gone and health `released` 1.5 s later. The script is scratchpad/nfr1/sleepcheck.py. A first run found the assertion not held because nothing polled the room after /api/play until the next discovery; the play route now polls the room at once (Story 5, ::test_playing_through_the_api_updates_the_monitors_cache_at_once) — red: n/a — manual
 
 ### Assertion manager
 **Task**: 6.1  
 **Description**: Subscriber on RoomMonitor changes; owns one caffeinate subprocess.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## CLI as a thin client on the shared core
 **Story**: 7  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 5  
-**Satisfies**: FR8, AD3
+**Satisfies**: FR8, AD3  
+**Audit**: pass (2026-11-03), 8 findings fixed (the last round's fixes are covered by tests and were not audited a third time)
 
 **Acceptance Criteria**:
 
 - With a stub service listening, `play`, `pause`, `resume`, `stop`, `next`, `prev`, `volume`, `status` and `rooms` each call the matching API endpoint, and `play` sends absolute paths. `[unit]`
+  - Evidence: tests/test_cli.py::test_each_command_calls_the_matching_endpoint (a real service over fake rooms, an ASGI recorder logging each request: play → POST /api/play; pause/resume/stop → POST /api/rooms/{uid}/transport; volume → POST …/volume or GET …/state; status → GET …/state and /api/rooms; rooms → GET /api/rooms), ::test_next_and_prev_go_through_the_service, ::test_play_sends_absolute_paths (incl. --append), ::test_an_unknown_room_lists_the_available_ones, ::test_ip_picks_the_room_through_the_service_including_a_stereo_partners_address, ::test_an_explicit_room_beats_sonos_ip_from_the_environment, ::test_sonos_room_fills_in_a_missing_room_but_an_explicit_ip_still_wins, ::test_an_ip_that_belongs_to_another_room_than_the_named_one_is_refused, ::test_the_direct_path_refuses_a_mismatched_ip_and_room_too, ::test_the_play_message_names_the_room_actually_used, ::test_the_default_room_comes_from_config_when_neither_flag_nor_env_say; the endpoints themselves: tests/test_play_api.py::test_transport_actions_act_on_the_groups_coordinator, ::test_transport_errors, ::test_a_speaker_that_refuses_a_transport_action_is_a_json_502, ::test_volume_sets_the_group_and_validates_the_level (full suite 273 passed) — red: 'assert 1 == 0' with the Origin header dropped (and, for the embedded server, `/api/browse` answering 200 instead of 404 with the API mounted); "assert ['stop','stop','stop'] == ['pause','resume','stop']" with every transport sent as stop; "assert ['a.wav','b.wav'] == ['/private/va…/music/b.wav']" with paths left relative; 'assert (502 == 400)' with the action check removed; "AssertionError: -1" with the volume range check removed (cli.py, client.py, service.py)
 - With the connection refused, `play` runs in-process on the shared core with stable URLs, and `pause` calls SoCo directly. With the stub returning 500, the error is shown and neither fallback runs. `[unit]`
+  - Evidence: tests/test_cli.py::test_with_the_connection_refused_pause_calls_soco_directly (pause, volume, status and rooms straight to SoCo), ::test_with_the_connection_refused_play_runs_in_process_with_stable_urls (the embedded server serves the stable /media/<root-id>/<path> form, with the played file's folder as the root, and the bytes match), ::test_in_process_play_of_a_symlinked_file_works_as_the_old_cli_did, ::test_the_in_process_message_does_not_claim_a_service_is_serving, ::test_the_embedded_server_answers_to_the_ip_the_speaker_uses, ::test_a_port_that_is_in_use_is_a_clean_error, ::test_the_embedded_server_serves_only_the_files_being_played_not_the_api,, ::test_an_in_process_append_is_refused_because_nothing_would_keep_serving_the_files, ::test_the_in_process_play_refuses_a_missing_path; with the stub returning 500: ::test_a_500_from_the_service_is_shown_and_neither_fallback_runs (pause, rooms, volume, status and play each exit 1 with the service's message and touch no speaker) — red: 'assert 1 == 0' with a refused connection treated as a service error; 'assert 0 == 1' with any ServiceError falling back to SoCo; "assert ('service keeps serving' not in 'Playing 1 t…')" with the in-process message claiming a service; 'AssertionError: 10.99.99.99' with the speaker's IP not allowed by the embedded server; 'assert 1 == 0' with a symlinked file's folder used as the root; 'assert 0 == 1' with --append allowed without a service; "assert (('pause',) in [])" with --ip ignored; 'AssertionError: it should notice the dead server thread' with the thread check removed; "assert (('pause',) in [])" with SONOS_IP overriding an explicit -r and "assert 'on Lounge;'" with the message naming the default room; 'AssertionError' with the embedded server mounting the whole API (server.py) (cli.py, client.py, server.py)
 - With the service running, `play` on a path outside the music folders exits non-zero with a message naming `config.toml`. `[unit]`
+  - Evidence: tests/test_cli.py::test_playing_a_path_outside_the_music_folders_exits_non_zero_naming_config_toml — red: "assert ('config.toml' in 'sonos: HTTP error\\n')" with the service's message replaced by a generic one; a ServiceError that is not a ValueError escapes main as a traceback (client.py)
 - The existing `tests/test_media.py` tests still pass unchanged. `[unit]`
+  - Evidence: tests/test_media.py is untouched (`git diff` empty) and its 33 tests pass (full suite 273 passed); `_parse_range` stays in server.py, where they import it — red: 'assert None == (0, 99)' with _parse_range's final return replaced by None (server.py _parse_range)
 
 ### Client and fallback
 **Task**: 7.1  
 **Description**: `src/sonos_cli/client.py`; rebuild `cmd_play`'s in-process path on `library.py`, removing `TrackServer`'s own Range and token code.  
-**Status**: Pending
+**Status**: Complete
 
 ---
 
 ## launchd install, uninstall and status
 **Story**: 8  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: Story 3, Story 5, Epic 01-01-epic-spikes  
 **Satisfies**: FR2, NFR3, AD6  
-**Effort**: high
+**Effort**: high  
+**Audit**: pass (2026-11-03), 5 findings fixed (the last round's fixes are covered by tests and were not audited a third time)  
+**Amended**: the four `[manual]` criteria that needed a real LaunchAgent on this Mac (install and the service answering with all online rooms, `kill -9` restart within 10 s, `status`/`uninstall` leaving nothing listening, the 5-minute idle memory and CPU figures) moved to epic 01-08 Story 7 as `[user]` checks, because installing a persistent LaunchAgent was refused in this session and the plan keeps user checks in the final epic (2026-11-03) — cited: plan rule that no other epic waits on a `[user]` criterion; the session's permission denial of `sonos service install`
+**Amended**: the launcher is no longer compiled at install time (epic 01-09 Story 1, 2026-11-03): a prebuilt universal binary ships in the package and `build_bundle` only runs `codesign`. Evidence lines below that name `clang`, `xcode-select`, `['clang', 'codesign']`, a developer-tools check, a compile failure or a test build that waits 0.5 s describe the earlier design: their current equivalents are tests/test_launchd.py::test_a_failing_codesign_is_an_install_error_with_its_words, ::test_a_missing_codesign_says_so_instead_of_a_traceback, ::test_install_needs_no_developer_tools, and the early-signal test, which now runs the shipped binary with `SONOS_LAUNCHER_SPAWN_DELAY_US=500000` (cited: spec NFR4, epic 01-09).  
+**Amended**: ffmpeg is now bundled with the package (epic 01-09 Story 2, 2026-11-03, the user's choice of the `imageio-ffmpeg` wheel): the lookup order is config path, bundled copy, `PATH`, `/opt/homebrew/bin`, `/usr/local/bin`. The tests named in the ffmpeg/ffprobe criterion now pass a stand-in for the bundled level (`managed=`) so each level is still tested alone; the order test is `test_binary_lookup_order_config_then_bundled_then_path_then_fallbacks`.
+**Signal**: user-criterion-in-build-story — project — manual criteria that need a persistent change on the user's Mac sat in a story other work depends on (Story 8; tag such criteria `[user]` and put them in the user-checks epic)
 
 **Acceptance Criteria**:
 
-- `sonos service install` writes `~/Library/LaunchAgents/local.sonos-cli.plist`, running the executable chosen in AD6 with `KeepAlive`, `RunAtLoad` and the log path, and loads it. Once it's started by launchd, `/api/health` shows `ffmpeg: ok`, and `/api/rooms` lists all 5 rooms. `[manual]`
-- After `kill -9` of the service process, `/api/health` is 200 again within 10 s. `[manual]`
-- `sonos service status` reports loaded, healthy and the log path. After `sonos service uninstall`, the plist is gone and nothing listens on the port. `[manual]`
-- Idle for 5 minutes with no UI open, the launchd-run service stays under 150 MB RSS and averages under 1% CPU. The same holds with one UI tab polling, once the UI exists, re-measured in Epic 01-03. `[manual]`
 - The plist content is generated by a function covered by a test asserting the executable, arguments, `KeepAlive` and log paths. `[unit]`
+  - Evidence: tests/test_launchd.py::test_the_plist_runs_the_launcher_with_keepalive_runatload_and_the_log_paths (executable, arguments, KeepAlive, RunAtLoad, both log paths, PATH with /opt/homebrew/bin), ::test_the_default_paths_are_the_ones_the_spec_names, ::test_the_bundle_declares_local_network_use — red: 'assert (False is True)' with KeepAlive off; 'assert (True is True and False is True)' with RunAtLoad off; "assert ['/Users/x/.l…', …] == ['/Users/x/Li…', …]" with the launcher left out of ProgramArguments; "assert '/private/var…/service.log' == '/dev/null'" with the stderr log path changed (launchd.py plist_content)
+- `sonos service install` builds the signed launcher bundle, writes `~/Library/LaunchAgents/local.sonos-cli.plist` running the executable chosen in AD6, and `bootstrap`s it. It replaces an agent that is already loaded and refuses an editable checkout unless told otherwise. `uninstall` boots it out and removes the plist, and `status` reports loaded, healthy and the log path. Against a fake `launchctl` in a sandbox directory. `[unit]`
+  - Evidence: tests/test_launchd.py::test_install_builds_the_bundle_writes_the_plist_and_bootstraps_it, ::test_install_replaces_an_agent_that_is_already_loaded, ::test_install_says_so_when_the_service_does_not_answer, ::test_install_refuses_an_editable_checkout_unless_told_to, ::test_install_without_the_developer_tools_explains_what_to_do, ::test_reinstalling_waits_for_the_old_agent_to_go_and_retries_a_refused_bootstrap, ::test_install_gives_up_with_a_clear_message_when_the_old_agent_never_unloads, ::test_uninstall_says_when_launchd_is_still_stopping_the_service_but_still_removes_the_plist, ::test_the_plist_is_not_group_or_world_writable_whatever_the_umask, ::test_a_failing_compile_is_an_install_error_with_the_compilers_words, ::test_uninstall_unloads_and_removes_the_plist, ::test_status_reports_loaded_healthy_and_the_log_path, ::test_the_cli_has_install_uninstall_and_status, ::test_an_install_error_is_reported_by_the_cli_not_as_a_traceback (a fake launchctl and a sandbox LaunchAgents/Logs/config dir; clang and codesign run for real) — red: "assert ['bootstrap', 'gui/501', …] in [['print', 'gui/501/local.sonos-cli']]" with bootstrap not called; 'InstallError: launchctl bootstrap failed: … 5: Input/output error' with the wait for the old agent removed, and the same with the retry removed; "assert (33204 & 511) == 420" with the plist's mode left to the umask; "Failed: DID NOT RAISE InstallError" with the developer-tools check removed; "assert (not False and False)" with the uninstall wait note removed; "ValueError: 'bootout' is not in list" with a loaded agent not booted out first; 'Failed: DID NOT RAISE InstallError' with the editable check removed; 'assert (not True)' with the plist not removed on uninstall; 'assert (0 == 1)' with status always succeeding; 'Regex pattern did not match' with the clang hint replaced (launchd.py)
+- The launcher bundle passes a strict signature check, is reused while its source is unchanged, runs its arguments and returns their exit status, and passes SIGTERM on to the child so launchd can stop the service. `[unit]`
+  - Evidence: tests/test_launchd.py::test_the_built_bundle_passes_a_strict_signature_check, ::test_the_bundle_is_reused_when_nothing_changed_and_rebuilt_when_the_launcher_changes, ::test_the_launcher_runs_its_arguments_and_returns_their_exit_status, ::test_the_launcher_passes_sigterm_on_so_launchd_can_stop_the_service, ::test_a_sigterm_that_arrives_before_the_launcher_knows_its_child_is_remembered_and_passed_on (a test build of the launcher waits 0.5 s between spawning the child and noting its pid, and the SIGTERM lands in that gap) (full suite 297 passed) — red: 'a sealed resource is missing or invalid' with the hash stamp written inside the bundle; 'assert (… == …) and [\'clang\', \'co…\'] == [\'clang\', \'codesign\']' with the bundle always rebuilt; 'assert -15 == (128 + <Signals.SIGTERM: 15>)' with signal forwarding removed; 'assert 0 == 7' with the child's exit status dropped; "Failed: the early SIGTERM was lost: the launcher and its child kept running" with the remembered-signal forward removed (launcher.c, launchd.py)
 
 ### Service subcommands
 **Task**: 8.1  
 **Description**: `service install|uninstall|status` using `launchctl bootstrap/bootout gui/$UID`.  
-**Status**: Pending
+**Status**: Complete
 
 ---

@@ -1,0 +1,6 @@
+<!doctype html><title>tone</title><button id=b>tone</button>
+<script>
+const c = new AudioContext(); const o = c.createOscillator(); o.frequency.value = 440; const g = c.createGain(); g.gain.value = 0.3;
+o.connect(g).connect(c.destination); o.start(); c.resume();
+setInterval(()=>{document.title='tone '+c.state+' '+Math.round(c.currentTime)}, 1000);
+</script>

@@ -1,0 +1,37 @@
+# 01-07 Story 2/3: the extension popup through the harness (2026-11-03), tests/extension_harness/popup_driver.py (re-taken after Story 3 audit round 1: the tracks line is now separate from the note)
+# Chrome 156 (branded, throwaway profile), a copy of the real extension/ loaded with Extensions.loadUnpacked, fake-rooms service on :8737 with this extension's ID in extension_ids.
+# The harness copy of the manifest also lists http://127.0.0.1:8798/* (the test pages' origin): chrome.action.openPopup() does not grant activeTab and CDP cannot click the toolbar. Scripts are the real ones. E stubs the service's 403 with CDP Fetch; F is a generated 6 MB page; G streams the tone page (real background and offscreen) and then opens the popup on a page with MP3 links.
+
+OBS browser: Chrome/156.0.8078.80
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS manifest permissions: ["tabCapture","offscreen","storage","activeTab","scripting"]
+OBS harness copy host permissions (production has only the first): ["http://localhost:8737/*","http://127.0.0.1:8798/*"]
+OBS A open popup: opened
+OBS A buttons on a page with MP3 links: ["Send page","Stream tab"]
+OBS A diagnostic: active tab: [[1691563862,"http://127.0.0.1:8798/audio.html"]]
+OBS A diagnostic: executeScript: [{"documentId":"A542B357F7A3FB71C424AF5CEFE77DA4","frameId":0,"result":"Test release"}]
+OBS A tracks line: 2 tracks on this page.
+OBS A rooms offered: ["Bedroom","Kitchen","Lounge","Office"]
+OBS A note after Send page: Playing 2 tracks from Test release on Kitchen.
+OBS A Kitchen queue: ['Halyard', 'Undertow']
+OBS A Kitchen state: PLAYING
+OBS B open popup: opened
+OBS B buttons right after opening: ["Stream tab"]
+OBS B buttons after the check: ["Stream tab"]
+OBS C1 page without audio: buttons at 0.5s: ["Checking…"]
+OBS C1 page without audio: buttons at 2.4s: ["Stream tab"]
+OBS C2 page with MP3 links: buttons at 0.6s: ["Checking…"]
+OBS C2 page with MP3 links: buttons at 2.5s: ["Stream tab"]
+OBS E buttons when the service refuses the extension: ["Stream tab"]
+OBS E note: The service doesn't allow this extension. Add fjgldlknkfejofhiebpnaiepahdhknpp to extension_ids in config.toml, then restart the service.
+OBS F buttons on a 6 MB page with an MP3 link at the top: ["Send page","Stream tab"]
+OBS F tracks line: 1 track on this page.
+OBS G page with MP3 links after a tab-closed stream: buttons: ["Send page","Stream tab"]
+OBS G note: The tab was closed (tab-closed).
+OBS G tracks line: 2 tracks on this page.
+OBS G while checking with a stream running: buttons: ["Checking…","Stop"]
+OBS G after Stop pressed during the check: buttons: ["Stream tab"]
+OBS G note: You stopped the stream (stop).
+OBS D selected after reopening: Lounge
+OBS D selected after renaming Lounge to Den: Den / true
+service log: /var/folders/26/vjvp9s655c357908ss43dw6h0000gn/T/sonos-popup-cfg-8lyvu80w/service.log

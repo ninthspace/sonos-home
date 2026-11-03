@@ -1,0 +1,26 @@
+# 01-07 Story 4: streaming a tab to the REAL Office through the extension (2026-11-03), tests/extension_harness/office_driver.py, final run on the finished code
+# tests/live.py muted both Office members first and restored them afterwards. Real service on :8737 (sonos service run), branded Chrome 156, the unmodified extension/, a 440 Hz tone page. Earlier runs on the same day: the first timed out ('The service didn't answer in time') because the service waited for the speaker before answering started; the second played but classed the stream as 'other source' because the speaker reports the track URI with the scheme twice. Both were fixed (see the epic).
+
+OBS office online: True
+OBS muted: [('Office', True), ('Office', True)]
+OBS browser: Chrome/156.0.8078.80
+OBS popup rooms: ["Bedroom","Lounge","Office"]
+OBS Office first PLAYING after (s) from the click: 6.0
+OBS t+11s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:05
+OBS t+21s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:16
+OBS t+31s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:26
+OBS t+41s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:35
+OBS t+51s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:45
+OBS t+61s: PLAYING x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh position 0:00:55
+OBS popup note while streaming: Streaming this tab to Office.
+OBS speaker raw: media uri: x-rincon-mp3radio://192.168.0.204:8737/live/jM65rJmeh9P6.mp3
+OBS speaker raw: transport: {'current_transport_state': 'PLAYING', 'current_transport_status': 'OK', 'current_speed': None}
+OBS speaker raw: track uri / title / position: ['x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh9P6.mp3', '', '0:01:02']
+OBS sleep assertion while streaming (FR17): held
+OBS Office after the hold: PLAYING source=ours uri=x-rincon-mp3radio://http://192.168.0.204:8737/live/jM65rJmeh9P6.mp3
+OBS seconds from Stop until Office is no longer PLAYING: 0.5
+OBS Office state after Stop: STOPPED
+OBS sleep assertion after Stop: released
+OBS popup note after Stop: You stopped the stream (stop).
+OBS after restore: [('Office', 76, False), ('Office', 76, False)]
+service log: /var/folders/26/vjvp9s655c357908ss43dw6h0000gn/T/sonos-office-cfg-4l_j0rf1/service.log

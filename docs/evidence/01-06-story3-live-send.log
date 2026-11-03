@@ -1,0 +1,17 @@
+# 01-06 Story 3: POST /api/send with https://shtl-experiment.com/hello-ep/ on muted Office (2026-11-03), run 4 (final code)
+# script: live_send2.py (muted_room from tests/live.py; service 'sonos service run -p 8757'). Runs 1-3 are described in the epic: run 1 (proxy URL with no name) showed the signed token as the queue title.
+# The third queue entry below was added by the script in the old no-name URL shape (the first entry's token, no name) with the DIDL title "DIDL TITLE WE SET"; the speaker titled it with the token, not the DIDL.
+
+muted: [('Office', True), ('Office', True)]
+send: {"title": "Hello EP", "total": 2, "started": true} ['Halyard', 'Undertow']
+queued URI 0 http://192.168.0.204:8757/remote/aHR0cHM6Ly9zaHRsLWV4cGVyaW1lbnQuY29tL2hlbGxvLWVwLzEvbXAzLXY1L1VpNkNCejJESl9zLzAxJTIwSGFseWFyZC5tcDM.09PvubUyL8kjKne3dNRlLE6UJ2IDfNUoJtYo5viE3lQ/Halyard.mp3
+queued URI 1 http://192.168.0.204:8757/remote/aHR0cHM6Ly9zaHRsLWV4cGVyaW1lbnQuY29tL2hlbGxvLWVwLzIvbXAzLXY1L1k1VEhKY1huanUwLzAyJTIwVW5kZXJ0b3cubXAz.s8nq9q0VPurl8MuzwwJmpc6jOcE4JZI9MmaKSeqygcg/Undertow.mp3
+speaker queue titles: ['Halyard', 'Undertow', 'aHR0cHM6Ly9zaHRsLWV4cGVyaW1lbnQuY29tL2hlbGxvLWVwLzEvbXAzLXY1L1VpNkNCejJESl9zLzAxJTIwSGFseWFyZC5tcDM.09PvubUyL8kjKne3dNRlLE6UJ2IDfNUoJtYo5viE3lQ']
+service queue: {"items": [{"index": 0, "title": "Halyard", "artist": "", "host": null}, {"index": 1, "title": "Undertow", "artist": "", "host": null}, {"index": 2, "title": "aHR0cHM6Ly9zaHRsLWV4cGVyaW1lbnQuY29tL2hlbGxvLWVwLzEvbXAzLXY1L1VpNkNCejJESl9zLzAxJTIwSGFseWFyZC5tcDM.09PvubUyL8kjKne3dNRlLE6UJ2IDfNUoJtYo5viE3lQ", "artist": "", "host": null}], "current": 0}
+2.0 PLAYING ours '' 0:00:06
+4.0 PLAYING ours '' 0:00:08
+6.0 PLAYING ours '' 0:00:10
+8.0 PLAYING ours '' 0:00:12
+10.0 PLAYING ours '' 0:00:14
+12.0 PLAYING ours '' 0:00:17
+after restore: [('Office', 76, False), ('Office', 76, False)]

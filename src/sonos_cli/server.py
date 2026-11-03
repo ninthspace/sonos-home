@@ -1,130 +1,15 @@
-"""A small HTTP server the Sonos player fetches tracks from.
+"""Helpers shared by the service and the CLI's in-process fallback.
 
-Only registered tracks are served, each under a random token, so nothing
-else on the Mac is reachable. Range requests are supported because Sonos
-uses them when seeking.
+`EmbeddedServer` runs the service's own media routes (stable URLs, Range, conversion on first fetch, the path
+guard) on a free port inside the CLI process, for when no service is running. There is no second file server.
 """
 
 from __future__ import annotations
 
 import re
-import secrets
 import socket
-import sys
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from urllib.parse import quote, unquote
-
-from .media import Track, convert
-
-CHUNK = 256 * 1024
-
-
-class TrackServer:
-    def __init__(self, host_ip: str, port: int = 0, verbose: bool = False):
-        self._tracks: dict[str, tuple[Track, Future[Path]]] = {}
-        self._converter = ThreadPoolExecutor(max_workers=2, thread_name_prefix="convert")
-        self.verbose = verbose
-        handler = type("Handler", (_Handler,), {"owner": self})
-        self._httpd = ThreadingHTTPServer((host_ip, port), handler)
-        self._httpd.daemon_threads = True
-        self.base_url = f"http://{host_ip}:{self._httpd.server_address[1]}/t/"
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._httpd.shutdown()
-        self._converter.shutdown(wait=False, cancel_futures=True)
-
-    def add(self, track: Track) -> str:
-        """Register a track (starting conversion if needed) and return its URL."""
-        token = secrets.token_urlsafe(12)
-        if track.needs_conversion:
-            future = self._converter.submit(convert, track)
-        else:
-            future = Future()
-            future.set_result(track.path)
-        self._tracks[token] = (track, future)
-        name = quote(track.path.stem + track.served_extension)
-        return f"{self.base_url}{token}/{name}"
-
-    def ready(self, url: str, timeout: float | None = None) -> Path:
-        """Block until the file behind `url` is ready to serve."""
-        token = url.removeprefix(self.base_url).split("/", 1)[0]
-        return self._tracks[token][1].result(timeout)
-
-    def lookup(self, token: str) -> tuple[Track, Future[Path]] | None:
-        return self._tracks.get(token)
-
-
-class _Handler(BaseHTTPRequestHandler):
-    owner: TrackServer
-    protocol_version = "HTTP/1.1"
-
-    def do_HEAD(self) -> None:
-        self._serve(send_body=False)
-
-    def do_GET(self) -> None:
-        self._serve(send_body=True)
-
-    def _serve(self, send_body: bool) -> None:
-        match = re.fullmatch(r"/t/([A-Za-z0-9_-]+)/[^/]*", unquote(self.path).split("?")[0])
-        entry = match and self.owner.lookup(match.group(1))
-        if not entry:
-            self.send_error(404)
-            return
-        track, future = entry
-        try:
-            path = future.result()  # waits if the track is still being converted
-        except Exception as exc:  # noqa: BLE001 - report conversion failures to the client
-            print(f"! {exc}", file=sys.stderr)
-            self.send_error(500)
-            return
-
-        size = path.stat().st_size
-        start, end = 0, size - 1
-        status = 200
-        range_header = self.headers.get("Range")
-        if range_header:
-            parsed = _parse_range(range_header, size)
-            if parsed is None:
-                self.send_response(416)
-                self.send_header("Content-Range", f"bytes */{size}")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-                return
-            start, end = parsed
-            status = 206
-
-        self.send_response(status)
-        self.send_header("Content-Type", track.mime)
-        self.send_header("Content-Length", str(end - start + 1))
-        self.send_header("Accept-Ranges", "bytes")
-        if status == 206:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.end_headers()
-        if not send_body:
-            return
-        try:
-            with path.open("rb") as f:
-                f.seek(start)
-                remaining = end - start + 1
-                while remaining > 0:
-                    chunk = f.read(min(CHUNK, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass  # Sonos routinely drops connections when skipping or seeking
-
-    def log_message(self, format: str, *args) -> None:  # noqa: A002
-        if self.owner.verbose:
-            sys.stderr.write(f"[http] {self.client_address[0]} {format % args}\n")
+import time
 
 
 def _parse_range(header: str, size: int) -> tuple[int, int] | None:
@@ -147,3 +32,46 @@ def local_ip_towards(remote_ip: str) -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.connect((remote_ip, 1400))
         return s.getsockname()[0]
+
+
+class EmbeddedServer:
+    def __init__(self, library, cfg, host_ip: str, port: int = 0):
+        self.library, self.cfg, self.host_ip, self.requested_port = library, cfg, host_ip, port
+        self.port = 0
+        self._server = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        import uvicorn
+        from . import service
+        # The speaker addresses us by the IP it can reach, which may not be the default route's address (VPN, two networks).
+        app = service.create_app(self.cfg, library=self.library, port=self.requested_port or None, media_only=True,      # nothing but the files being played
+                                 allowed_hosts=service.default_allowed_hosts() | {self.host_ip})
+        self._server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=self.requested_port, log_level="warning"))
+        self._thread = threading.Thread(target=self._run, name="embedded-media", daemon=True)
+        self._thread.start()
+        for _ in range(200):
+            if self._server.started:
+                break
+            if not self._thread.is_alive():                       # e.g. the port is in use: uvicorn exits the thread
+                raise ValueError(f"Can't serve files on port {self.requested_port or 'any'}: the port may be in use or not allowed")
+            time.sleep(0.05)
+        else:
+            raise ValueError("the file server did not start")
+        self.port = self._server.servers[0].sockets[0].getsockname()[1]
+
+    def _run(self) -> None:
+        try:
+            self._server.run()
+        except SystemExit:                                        # uvicorn exits the thread when it can't bind
+            pass
+
+    @property
+    def base_url(self) -> str:
+        return f"http://{self.host_ip}:{self.port}"
+
+    def stop(self) -> None:
+        if self._server:
+            self._server.should_exit = True
+        if self._thread:
+            self._thread.join(5)

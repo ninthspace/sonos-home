@@ -1,4 +1,4 @@
-"""Find audio files, probe them with ffprobe, and convert what Sonos S1 can't play.
+"""Find audio files, probe them (ffprobe, or ffmpeg itself), and convert what Sonos S1 can't play.
 
 Sonos S1 players play MP3, AAC/M4A, Ogg Vorbis, WMA, FLAC, ALAC, WAV and AIFF,
 but only up to 16-bit / 48 kHz and two channels. Anything outside that is
@@ -10,9 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import config
 
 AUDIO_EXTENSIONS = {
     ".mp3", ".m4a", ".mp4", ".aac", ".flac", ".wav", ".aif", ".aiff",
@@ -110,8 +113,13 @@ def _is_audio_file(path: Path) -> bool:
 
 
 def probe(path: Path) -> AudioInfo:
+    """What a file is. Uses ffprobe when there is one (config, PATH, Homebrew); otherwise ffmpeg itself, which is what ships with
+    the package, so nothing has to be installed."""
+    ffprobe = config.find_binary("ffprobe", config.get().ffprobe)
+    if ffprobe is None:
+        return probe_with_ffmpeg(path)
     result = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "a:0",
+        [ffprobe, "-v", "error", "-select_streams", "a:0",
          "-show_entries", "stream=codec_name,sample_rate,channels,bits_per_sample,"
                           "bits_per_raw_sample,sample_fmt:stream_tags:format=duration:format_tags",
          "-of", "json", str(path)],
@@ -120,6 +128,72 @@ def probe(path: Path) -> AudioInfo:
     if result.returncode != 0:
         raise ValueError(f"ffprobe could not read {path}: {result.stderr.strip()}")
     return parse_probe(json.loads(result.stdout), path)
+
+
+_LAYOUT_CHANNELS = {"mono": 1, "stereo": 2, "downmix": 2, "binaural": 2, "quad": 4, "hexagonal": 6, "octagonal": 8, "cube": 8, "hexadecagonal": 16}
+
+
+def _channels(layout: str) -> int:
+    """ffmpeg's channel layout words ("stereo", "quad(side)", "5.1(side)", "7.1.4", "3 channels") as a count.
+
+    A layout this does not know is counted as more than stereo, so the file gets converted (down to two channels) rather than
+    sent to the speaker as it is."""
+    layout = layout.strip().lower()
+    m = re.fullmatch(r"(\d+) channels?(?: \(.*\))?", layout)
+    if m:
+        return int(m.group(1))
+    name = re.sub(r"\(.*\)$", "", layout)                 # "quad(side)", "5.1(side)": the suffix says where, not how many
+    if name in _LAYOUT_CHANNELS:
+        return _LAYOUT_CHANNELS[name]
+    m = re.fullmatch(r"\d+(?:\.\d+)+", name)             # 5.1, 7.1.4, 9.1.6: every part is channels
+    if m:
+        return sum(int(part) for part in name.split("."))
+    return MAX_CHANNELS + 1
+
+
+_STREAM = re.compile(r"Stream #\d+:\d+[^:]*: Audio: (?P<codec>[\w-]+)[^,]*?(?: \([^)]*\))*, (?P<rate>\d+) Hz, (?P<layout>[^,]+?)(?:, (?P<fmt>[a-z0-9]+)(?: \((?P<bits>\d+) bit\))?)?(?:,|$)")
+
+
+def parse_ffmpeg_info(text: str, path: Path | str = "?") -> dict:
+    """The facts `ffmpeg -i` prints on stderr, in the shape parse_probe takes from ffprobe's JSON."""
+    streams, fmt_tags, stream_tags, duration = [], {}, {}, None
+    where = "format"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Input #"):
+            where = "format"
+        elif stripped.startswith("Duration:"):
+            m = re.match(r"Duration: (\d+):(\d\d):(\d\d(?:\.\d+)?)", stripped)
+            if m:
+                duration = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        elif stripped.startswith("Chapter #"):
+            where = "other"                                    # a chapter's title is not the track's
+        elif stripped.startswith("Stream #"):
+            m = _STREAM.search(stripped)
+            where = "audio" if m and not streams else "other"
+            if m and not streams:
+                entry = {"codec_name": m.group("codec"), "sample_rate": m.group("rate"), "channels": _channels(m.group("layout")),
+                         "sample_fmt": m.group("fmt") or ""}
+                if m.group("bits"):
+                    entry["bits_per_raw_sample"] = m.group("bits")
+                streams.append(entry)
+        elif stripped == "Metadata:":
+            continue
+        elif ":" in stripped and line.startswith("    ") and not stripped.startswith(("Chapter", "Side data")):
+            key, _, value = stripped.partition(":")
+            key, value = key.strip().lower(), value.strip()
+            if key in ("title", "artist", "album") and value:
+                (fmt_tags if where == "format" else stream_tags if where == "audio" else {}).setdefault(key, value)
+    if streams:
+        streams[0]["tags"] = stream_tags
+    return {"streams": streams, "format": {"duration": duration, "tags": fmt_tags}}
+
+
+def probe_with_ffmpeg(path: Path) -> AudioInfo:
+    result = subprocess.run([config.binary("ffmpeg"), "-hide_banner", "-nostdin", "-i", str(path)], capture_output=True, text=True, errors="replace")
+    if "Input #0" not in result.stderr:                    # ffmpeg exits 1 here whatever happens (it was given no output): the text tells
+        raise ValueError(f"ffmpeg could not read {path}: {result.stderr.strip().splitlines()[-1] if result.stderr.strip() else 'no output'}")
+    return parse_probe(parse_ffmpeg_info(result.stderr, path), path)
 
 
 def parse_probe(data: dict, path: Path | str = "?") -> AudioInfo:
@@ -196,7 +270,7 @@ def convert(track: Track) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".partial.flac")
     rate = target_sample_rate(track.info.sample_rate)
-    cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(track.path),
+    cmd = [config.binary("ffmpeg"), "-v", "error", "-nostdin", "-y", "-i", str(track.path),
            "-map", "0:a:0", "-map_metadata", "0",
            "-af", f"aresample=out_sample_rate={rate}:out_sample_fmt=s16:dither_method=triangular",
            "-c:a", "flac"]
