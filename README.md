@@ -116,8 +116,7 @@ signed itself, and only public internet addresses: loopback, your LAN and other 
 page has MP3, AAC, FLAC or Ogg Vorbis links) and streams the tab's own audio to a room (**Stream tab** / **Stop**, on any page, for
 YouTube and the like). A streamed tab is encoded as MP3 on this Mac and plays a few seconds behind the tab; it keeps going when
 the popup closes or the tab is in the background, and ends when you press Stop, close the tab, or the room switches to another
-source. The popup says which. *Also play here* keeps the tab audible on this Mac while it streams (off by default: capturing a
-tab mutes it). Only one tab streams at a time. Load it from `chrome://extensions` with *Developer mode* on and
+source. The popup says which. *Also play here* keeps the tab audible on this Mac while it streams, held back about 4 s so it sounds together with the speaker (off by default: capturing a tab mutes it). Only one tab streams at a time. Load it from `chrome://extensions` with *Developer mode* on and
 *Load unpacked* pointing at `extension/`. Its ID is fixed by the key in its manifest: `fjgldlknkfejofhiebpnaiepahdhknpp`. Allow
 it in `~/Library/Application Support/sonos/config.toml` and restart the service:
 

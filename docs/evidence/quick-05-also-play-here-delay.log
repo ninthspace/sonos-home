@@ -1,0 +1,42 @@
+# quick 05: delay_driver.py runs, 2026-11-04 (fake-rooms service on :8737 from .venv, branded Chrome 156, extension/ unmodified unless noted)
+## run 1: first build (delay disconnected while unticked)
+OBS browser: Chrome/156.0.8078.80
+OBS extension: /Users/chris/Work/git/sonos/extension
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS A the stream is answering: True
+OBS A local-branch RMS after the stream answered (s, RMS): [(0.0, 0), (0.25, 0), (0.5, 0), (0.76, 0), (1.01, 0), (1.26, 0), (1.52, 0), (1.77, 0), (2.03, 0), (2.29, 0), (2.54, 0), (2.8, 0), (3.05, 0), (3.3, 0), (3.55, 0), (3.8, 0), (4.05, 0.2127), (4.31, 0.2114), (4.56, 0.2116), (4.82, 0.2122), (5.07, 0.2113), (5.32, 0.2128), (5.57, 0.2116), (5.82, 0.2115), (6.08, 0.2123), (6.33, 0.2119), (6.58, 0.2119), (6.83, 0.2123)]
+OBS A max RMS in the first 3 s: 0
+OBS A first time RMS > 0.05 (s): 4.05
+OBS A the stream itself: tone Hz in its first 3 s: 439.8
+OBS B the stream is answering: True
+OBS B off throughout the first 5.5 s: max RMS: 0
+OBS B ticked: (s, RMS): [(0.0, 0), (0.25, 0), (0.5, 0), (0.76, 0), (1.01, 0), (1.27, 0), (1.52, 0), (1.78, 0)]
+OBS B ticked: first time RMS > 0.05 (s): None
+OBS B unticked: (s, RMS): [(0.0, 0), (0.25, 0), (0.5, 0), (0.76, 0), (1.02, 0), (1.27, 0), (1.52, 0), (1.78, 0)]
+OBS B unticked: first time RMS < 0.01 (s): 0.0
+OBS B the stream is still answering: True
+service log: /var/folders/26/vjvp9s655c357908ss43dw6h0000gn/T/sonos-delay-cfg-42d2b3e8/service.log
+## second build (gain-switched), the shipped one (a run in between failed in the harness, the popup not yet showing Stream tab, before the driver waited for the button)
+OBS browser: Chrome/156.0.8078.80
+OBS extension: /Users/chris/Work/git/sonos/extension
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS A the stream is answering: True
+OBS A max RMS in the first 3 s: 0
+OBS A first time RMS > 0.05 (s): 4.05
+OBS A the stream itself: tone Hz in its first 3 s: 439.8
+OBS B the stream is answering: True
+OBS B off throughout the first 5.5 s: max RMS: 0
+OBS B ticked: first time RMS > 0.05 (s): 0.25
+OBS B unticked: first time RMS < 0.01 (s): 0.25
+OBS B the stream is still answering: True
+service log: /var/folders/26/vjvp9s655c357908ss43dw6h0000gn/T/sonos-delay-cfg-rtunhrtw/service.log
+## control: --delay 0, extension: a temp copy under /var/folders/…/sonos-ext-*/extension (a copy of extension/ with LOCAL_DELAY_S = 0, same pinned ID)
+OBS A the stream is answering: True
+OBS A max RMS in the first 3 s: 0.2128
+OBS A first time RMS > 0.05 (s): 0.0
+OBS A the stream itself: tone Hz in its first 3 s: 439.9
+OBS B the stream is answering: True
+OBS B off throughout the first 5.5 s: max RMS: 0
+OBS B ticked: first time RMS > 0.05 (s): 0.26
+OBS B unticked: first time RMS < 0.01 (s): 0.26
+OBS B the stream is still answering: True

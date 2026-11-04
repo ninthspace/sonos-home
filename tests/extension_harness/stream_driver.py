@@ -8,7 +8,7 @@ page on 127.0.0.1:8798, launches Chrome as in README.md, loads the unmodified `e
 `OBS name: value` lines. The listener reads the service's `/live/<id>.mp3` over a raw socket and measures the tone with ffmpeg.
 """
 
-import asyncio, json, os, shutil, signal, socket, struct, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import asyncio, json, os, re, shutil, signal, socket, struct, subprocess, sys, tempfile, time, urllib.error, urllib.request
 import websockets
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -19,6 +19,8 @@ SERVICE = "http://localhost:8737"
 PAGES = "http://127.0.0.1:8798"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"   # the harness drives Chrome, not the service: any ffmpeg will do
+# "Also play here" is held back LOCAL_DELAY_S (docs/quick/05): wait past it before reading the local branch, or "on" reads like "off"
+LOCAL_WAIT = float(re.search(r"const LOCAL_DELAY_S = ([0-9.]+);", open(os.path.join(EXT, "offscreen.js")).read()).group(1)) + 1.5
 
 cfgdir = tempfile.mkdtemp(prefix="sonos-stream-cfg-")
 open(os.path.join(cfgdir, "config.toml"), "w").write(f'extension_ids = ["{EXTID}"]\n')
@@ -285,7 +287,7 @@ async def main():
             await click(sid, "Stream tab")
             stream_id = await wait_live("Kitchen")
             obs(f"3 also play here {'on' if also else 'off'}: the stream is answering", bool(stream_id) and not is_404(stream_id))
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(LOCAL_WAIT)
             obs(f"3 also play here {'on' if also else 'off'}: level on the local branch (RMS, 5 readings; null would mean nothing is captured)", await offscreen_level())
             await click(sid, "Stop")
             await ended_within(stream_id, "Kitchen")
@@ -303,7 +305,7 @@ async def main():
         obs("3b the stream is answering", bool(stream_id) and not is_404(stream_id))
         obs("3b off at the start", await offscreen_level())
         await c.eval("document.getElementById('local').checked = true; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(LOCAL_WAIT)
         obs("3b ticked while streaming", await offscreen_level())
         await c.eval("document.getElementById('local').checked = false; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
         await asyncio.sleep(1.0)
@@ -400,7 +402,7 @@ async def main():
                 for pid in pids:
                     os.kill(int(pid), signal.SIGCONT)
                 stream_id = await wait_live("Kitchen")
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(LOCAL_WAIT)
                 obs(f"{label}: the stream is answering", bool(stream_id) and not is_404(stream_id))
                 obs(f"{label}: level on the local branch", await offscreen_level())
                 await click(sid, "Stop")

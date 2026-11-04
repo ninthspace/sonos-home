@@ -300,14 +300,19 @@ The user's six observations from their first use of the installed service (2026-
 
 ## Check the refinements on the real speakers
 **Story**: 10  
-**Status**: Pending  
+**Status**: In Progress  
 **Blocked by**: Story 2, Story 4, Story 5, Story 6, Story 7, Story 9  
 **Satisfies**: FR9, FR11, FR19, FR23, FR24
 
 **Acceptance Criteria**:
 
 - With the service reinstalled from this repo (`uv tool install . --reinstall`, `sonos service install`), play a local file on Office from the UI on the Mac and watch the bar and time for 30 s: they move steadily, without stepping, and never jump backwards by more than a second. Report what you saw. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user reported this check worked as written (a local file on Office from the UI on the Mac); no further detail given — red: n/a — user
 - Click about halfway along the bar on that file and listen: playback jumps to about the middle and the bar and time show it within 2 s. Then send `https://shtl-experiment.com/foreshore/` to Office and do the same on its first track (Office reported a duration for these tracks on 2026-11-03; if the bar is disabled instead, report that). Report both. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user reported this check worked as written (click-to-seek on a local file and on a Foreshore track on Office); no further detail given — red: n/a — user
 - Drag Bedroom's fader on its strip from the Mac and then from the phone (`http://<Mac IP>:8737/`), and the fader of a grouped room: the speaker's volume follows and the Sonos app shows the same level. Report the levels, and whether the phone fader moves by dragging anywhere along it or only by its thumb. `[user]`
+  - Waiting on user: dragging the faders worked from the Mac (user, 2026-11-04, on the second Mac); still to do: the phone (`http://<Mac IP>:8737/`), a grouped room's fader, the levels the Sonos app showed, and whether the phone fader moves by dragging anywhere along it or only by its thumb.
 - Click a queue row on Office: report that the row showed it was taken at once and became current when the speaker started it. On the phone, open the Rooms view and tap a "Group with…" select: report that the page didn't zoom and the select looks like the keys beside it. `[user]`
+  - Waiting on user: the queue-row feedback worked on the Mac (user, 2026-11-04, on the second Mac); still to do: on the phone, open Rooms, tap a "Group with…" select and report that the page didn't zoom and the select matches the keys.
 - Before the folder check, copy `~/Library/Application Support/sonos/config.toml` to `config.before.toml`. On the Mac, add a real folder not yet configured from the Music view (try browsing into `~/Documents` and report what the picker shows), play a file from it, then remove it; report `diff config.before.toml config.toml` after the add (only `music_folders` changed) and after the remove (no difference). On the phone, report that the folder list shows without Add or Remove, the phone's IP, and the service log line for its `GET /api/folders`. `[user]`
+  - Waiting on user: adding and removing a folder from the Music view worked on the Mac (user, 2026-11-04, on the second Mac; no `config.before.toml` diff taken); still to do: the two `diff` results, what the picker shows in `~/Documents`, and on the phone that the folder list shows without Add or Remove, with the phone's IP and the service log line for its `GET /api/folders`.

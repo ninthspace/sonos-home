@@ -7,13 +7,15 @@
 
 ## Local masters at the desk
 **Story**: 1  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR5, FR9
+**Satisfies**: FR5, FR9  
+**Audit**: pass after fixes (2026-11-04), 2 rounds: round 1 (1 Critical, shared with Stories 3 and 4: the user's Evidence lines were not in the contract's `[user]` form) and round 2 (pass)  
 
 **Acceptance Criteria**:
 
 - Add the folder holding your masters to `music_folders` in `~/Library/Application Support/sonos/config.toml` and restart the service. Then in the UI on the Mac, browse to a folder of your 24-bit masters (e.g. the GLDR folder) and click Play folder on Office. Track 1 plays audibly within a few seconds at the right pitch and speed, with no clicks, and Next moves to track 2. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user reported this check worked as written (playing a folder of their masters on Office from the UI); no further detail given — red: n/a — user
 
 ---
 
@@ -26,31 +28,38 @@
 **Acceptance Criteria**:
 
 - On your phone on home Wi-Fi, open `http://<mac-ip>:8737/`, choose Lounge, set volume to 25 and group Kitchen into Lounge. The Sonos app shows Lounge + Kitchen grouped at the same volume, and the page has no sideways scrolling. `[user]`
+  - Waiting on user: not tested on 2026-11-04. Kitchen is offline (the user said to ignore it, 2026-11-03), so group another room into Lounge, e.g. Bedroom, and report what the Sonos app shows and whether the page scrolls sideways.
 
 ---
 
 ## Your Faircamp release on a speaker
 **Story**: 3  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR13, FR14
+**Satisfies**: FR13, FR14  
+**Audit**: pass after fixes (2026-11-04), 2 rounds: round 1 (1 Critical, shared with Stories 1 and 4: the user's Evidence lines were not in the contract's `[user]` form) and round 2 (pass)  
 
 **Acceptance Criteria**:
 
 - In your own Chrome with the extension loaded, open a release on shtl-experiment.com and click Send page with Office selected. Track 1 plays audibly in the Office, and the Sonos app shows the right title. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user reported this check worked as written (Send page from the extension on a shtl-experiment.com release, Office selected); no further detail given — red: n/a — user
 
 ---
 
 ## YouTube to the Office, and its delay
 **Story**: 4  
-**Status**: Pending  
+**Status**: Complete  
 **Blocked by**: —  
-**Satisfies**: FR15, NFR2
+**Satisfies**: FR15, NFR2  
+**Audit**: pass after fixes (2026-11-04), 2 rounds: round 1 (2 Criticals: criterion 2 asked for a measured delay figure that the user did not take, settled by the user dropping the measured figure (Amended line, spec NFR2 amended); the Evidence lines were not in the contract's `[user]` form; a Suggestion taken: the 5 s stops are recorded as judged, not timed) and round 2 (pass; Suggestions not taken: criterion 2's text still names the figure, which the Amended line overrides; epic 01-01's historical Amended line still says NFR2 is measured)  
+**Amended**: criterion 2 no longer needs a measured figure or the phone recording: the user's judgement that the gap is within 6 s is enough (2026-11-04) — cited: NFR2 (amended the same day), the user's choice in chat on 2026-11-04 after audit round 1 found the criterion unmet as written
 
 **Acceptance Criteria**:
 
 - On a YouTube music video, click Stream tab with Office selected. It plays audibly in the Office. It stops within 5 s of clicking Stop, and within 5 s of closing the tab on a second run. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user reported this check worked as written (Stream tab from YouTube to Office, then Stop, then closing the tab); the user judged both stops to be within 5 s; stop times not taken — red: n/a — user
 - Stream a click-track video to Office and record the Mac and the speaker together on your phone. The gap between the clicks is 6 s or less, and you report the figure. `[user]`
+  - Evidence (user, 2026-11-04): on a second Mac with the service installed fresh from github.com/ninthspace/sonos-home at cf3c63d, reported in chat with no figures or screenshots, the user judged the gap between the Mac and the speaker to be within 6 s; **figure not taken** (the user chose to record it this way, 2026-11-04) — red: n/a — user
 
 ---
 
