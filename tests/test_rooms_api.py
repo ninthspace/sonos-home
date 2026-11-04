@@ -253,3 +253,20 @@ def test_when_a_groups_coordinator_leaves_the_rooms_it_led_are_reported_with_the
         assert entry["coordinator_uid"] != system.lounge.uid                           # nobody still claims the one who left
         assert system.lounge.uid not in [m["uid"] for m in entry["members"]]
         assert sorted(m["name"] for m in entry["members"] if m["visible"]) == ["Bedroom", "Kitchen"]
+
+
+# ---- the reading's age (epic 01-10 Story 2) ---------------------------------------------------------------------------
+
+def test_the_room_state_carries_when_it_was_read_and_when_it_was_answered(tmp_path):
+    import time as _t
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    uid = system.lounge.uid
+    before = _t.time()
+    monitor.refresh_group_of(uid)
+    body = client.get(f"/api/rooms/{uid}/state").json()
+    after = _t.time()
+    assert isinstance(body.get("updated"), float) and isinstance(body.get("now"), float)
+    assert before <= body["updated"] <= body["now"] <= after
+    _t.sleep(0.05)
+    again = client.get(f"/api/rooms/{uid}/state").json()
+    assert again["updated"] == body["updated"] and again.get("now", 0) > body["now"]          # the cached reading is the same one, answered later

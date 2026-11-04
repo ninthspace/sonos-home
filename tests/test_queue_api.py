@@ -201,3 +201,16 @@ def test_queue_title_inverts_display_name_for_any_title(title, mime):
     from urllib.parse import unquote
     got = remote.queue_title(f"http://h:1/remote/T/{name}", unquote(name), "")
     assert got == unquote(name).rsplit(".", 1)[0] and not got.endswith((".mp3", ".m4a", ".aac"))
+
+
+def test_the_jump_refreshes_the_cached_state_before_it_answers(tmp_path):
+    """The page asks for the room's state the moment the jump returns (epic 01-10 Story 7): it must already show the new track."""
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    fill(system, music, client)
+    monitor.refresh_group_of(system.lounge.uid)
+    before = client.get(f"/api/rooms/{system.lounge.uid}/state").json()
+    assert before["track"]["index"] == 0
+    r = post_json(client, f"/api/rooms/{system.lounge.uid}/queue/jump", {"index": 2})
+    assert r.status_code == 200
+    after = client.get(f"/api/rooms/{system.lounge.uid}/state").json()          # no refresh in between
+    assert after["track"]["index"] == 2 and after["updated"] > before["updated"]

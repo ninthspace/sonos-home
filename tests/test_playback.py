@@ -66,8 +66,11 @@ def test_a_mixed_folder_is_queued_in_name_order_with_mime_types_and_the_placehol
     assert player.wait_idle()
     queue = system.lounge.queue
     assert [i.title for i in queue] == ["01-plain", "02-hires", "03-song"]
-    assert [i.resources[0].uri for i in queue] == [lib.media_path(BASE, mix / n)
-                                                    for n in ("01-plain.wav", "02-hires.wav", "03-song.mp3")]
+    assert [i.resources[0].uri for i in queue] == [lib.media_path(BASE, mix / "01-plain.wav"),
+                                                    lib.media_path(BASE, mix / "02-hires.wav", converted=True),         # served as FLAC: named `.flac`
+                                                    lib.media_path(BASE, mix / "03-song.mp3")]
+    assert [i.resources[0].uri.rsplit(".", 1)[1] for i in queue] == ["wav", "flac", "mp3"]
+    assert queue[1].resources[0].uri.endswith("02-hires.wav.flac")
     assert [i.resources[0].protocol_info for i in queue] == [
         "http-get:*:audio/wav:*", "http-get:*:audio/flac:*", "http-get:*:audio/mpeg:*"]    # hi-res is served as FLAC
     assert [s["path"] for s in result["skipped"]] == [str(mix / "04-cloud.wav")]
@@ -75,6 +78,18 @@ def test_a_mixed_folder_is_queued_in_name_order_with_mime_types_and_the_placehol
     assert result["skipped_total"] == 1 and result["truncated"] is None and result["total"] == 3
     assert system.lounge.get_current_track_info()["playlist_position"] == "1"
     assert system.lounge.transport_state == "PLAYING"
+
+
+def test_a_hi_res_first_track_gets_the_flac_url_too(system, tmp_path):
+    from audio import make_tone
+    music = tmp_path / "music"
+    make_tone(music / "01-master.wav", rate=96000, bits=24)
+    make_tone(music / "02-plain.wav")
+    _, cfg, lib, player = build(tmp_path, system)
+    player.play(system.lounge.uid, [str(music)])
+    assert player.wait_idle()
+    uris = [i.resources[0].uri for i in system.lounge.queue]
+    assert [u.rsplit(".", 1)[1] for u in uris] == ["flac", "wav"] and uris[0].endswith("01-master.wav.flac")     # the FIRST queued item
 
 
 def test_the_placeholder_is_never_probed_or_opened(system, tmp_path, monkeypatch):

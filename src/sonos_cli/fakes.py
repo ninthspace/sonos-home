@@ -16,6 +16,8 @@ was switched to another source".
 from __future__ import annotations
 
 import re
+import threading
+import time
 from dataclasses import dataclass
 
 from soco.exceptions import SoCoSlaveException, SoCoUPnPException
@@ -93,6 +95,7 @@ class FakeSoCo:
         if not self.is_coordinator:
             raise SoCoSlaveException(f"The method or property can only be called/used on the coordinator "
                                      f"in a group ({self.player_name} follows {self.coordinator.player_name})")
+        self._system.sync()                  # real-time mode: bring the playhead up to now before this call changes anything
         return self
 
     # ---- identity -----------------------------------------------------------------------------
@@ -290,11 +293,13 @@ class FakeSoCo:
 
     def get_current_transport_info(self) -> dict:
         self.reads["transport"] = self.reads.get("transport", 0) + 1
+        self._system.sync()
         return {"current_transport_state": self.coordinator.transport_state,
                 "current_transport_status": "OK", "current_speed": "1"}
 
     def get_current_track_info(self) -> dict:
         self.reads["track"] = self.reads.get("track", 0) + 1
+        self._system.sync()
         src = self if self.is_coordinator else self.coordinator
         item = src.queue[src.queue_index] if src.queue_index is not None and src.queue_index < len(src.queue) else None
         return {
@@ -303,7 +308,7 @@ class FakeSoCo:
             "artist": getattr(item, "creator", "") if item is not None else "",
             "album": getattr(item, "album", "") if item is not None else "",
             "uri": self._reported_uri(),
-            "position": _hms(src.position),
+            "position": _hms(int(src.position)),
             "duration": _item_duration(item),
         }
 
@@ -315,6 +320,32 @@ class FakeSoCo:
         c = self.coordinator
         if c.transport_state == PLAYING:
             c.position += int(seconds)
+
+    def current_duration(self) -> int:
+        """Seconds in the current queue item, 0 when it has none (a radio or live stream)."""
+        item = self.queue[self.queue_index] if self.queue_index is not None and self.queue_index < len(self.queue) else None
+        return _seconds(_item_duration(item))
+
+    def play_for(self, seconds: float) -> None:
+        """Let a PLAYING coordinator play for `seconds` of real time: advance, stay inside the track's duration, and at its end
+        go to the next queue item (or stop after the last one). Used by `FakeSystem.sync` in real-time mode."""
+        while seconds > 0 and self.transport_state == PLAYING:
+            duration = self.current_duration()
+            if not duration:
+                self.position += seconds                       # no duration (a stream): just keep counting
+                return
+            room = duration - self.position
+            if seconds < room:
+                self.position += seconds
+                return
+            seconds -= room
+            if self.queue_index is not None and self.queue_index + 1 < len(self.queue):
+                self.queue_index += 1
+                self.position = 0
+            else:
+                self.transport_state = STOPPED
+                self.position = 0
+                return
 
 
 class FakeQueue(list):
@@ -330,6 +361,11 @@ def _item_uri(item) -> str:
 def _item_duration(item) -> str:
     resources = getattr(item, "resources", None) or []
     return (resources[0].duration if resources and resources[0].duration else "0:00:00")
+
+
+def _seconds(hms: str) -> int:
+    h, m, s = (int(x) for x in hms.split(":"))
+    return h * 3600 + m * 60 + s
 
 
 def _hms(seconds: int) -> str:
@@ -358,8 +394,13 @@ class FakeSnapshot:
 class FakeSystem:
     """Office (Play:1 pair: coordinator + invisible satellite), Bedroom, Kitchen and Lounge."""
 
-    def __init__(self) -> None:
+    def __init__(self, realtime: bool = False) -> None:
+        """With `realtime`, a PLAYING room's position follows the wall clock (`sonos service run --fake-rooms`); otherwise it
+        moves only when a test calls `advance()`."""
         self.devices: list[FakeSoCo] = []
+        self.realtime = realtime
+        self._synced_at = time.monotonic()
+        self.lock = threading.RLock()          # the monitor thread, worker threads and the event loop all read and move the playhead
         self.office = self._add("RINCON_B8E937B8082A01400", "Office", "192.168.0.21", "Sonos PLAY:1")
         self.office_satellite = self._add("RINCON_B8E937B80E7401400", "Office", "192.168.0.27",
                                           "Sonos PLAY:1", visible=False)
@@ -368,6 +409,17 @@ class FakeSystem:
         self.bedroom = self._add("RINCON_B8E937A005B801400", "Bedroom", "192.168.0.31", "Sonos PLAY:1")
         self.kitchen = self._add("RINCON_347E5C4251C401400", "Kitchen", "192.168.0.29", "Sonos PLAY:3")
         self.lounge = self._add("RINCON_000E58AABB0101400", "Lounge", "192.168.0.26", "Sonos CONNECT:AMP")
+
+    def sync(self) -> None:
+        """In real-time mode, play every PLAYING coordinator for the time since the last sync. A no-op otherwise."""
+        if not self.realtime:
+            return
+        with self.lock:
+            now = time.monotonic()
+            elapsed, self._synced_at = now - self._synced_at, now
+            for d in self.devices:
+                if d.is_coordinator:
+                    d.play_for(elapsed)
 
     def _add(self, uid, name, ip, model, visible=True) -> FakeSoCo:
         d = FakeSoCo(self, uid, name, ip, model, visible)

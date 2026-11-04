@@ -12,6 +12,7 @@ dependencies = [
     "imageio-ffmpeg==0.8.1",
     "soco>=0.32.1",
     "starlette>=1.10.0",
+    "tomlkit>=0.15.2,<0.16",
     "uvicorn[standard]>=0.54.0",
     "websockets>=17.4",
 ]

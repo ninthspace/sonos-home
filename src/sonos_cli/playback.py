@@ -66,6 +66,30 @@ class FolderUnreadable(PlayError):
     status = 403
 
 
+class NotSeekable(PlayError):
+    """The room's current track can't be seeked: it has no length (radio, a live stream) or the position isn't inside it."""
+    status = 409
+
+
+class NotThisMac(PlayError):
+    """Changing or browsing the music folders is allowed only from the Mac itself (FR23)."""
+    status = 403
+
+
+class FolderRefused(PlayError):
+    """A folder that can't be added: it doesn't exist, isn't a folder or can't be read."""
+    status = 422
+
+
+class FolderConflict(PlayError):
+    """A folder that is already configured or overlaps one, or a config file that can't be changed."""
+    status = 409
+
+
+class UnknownFolder(PlayError):
+    status = 404
+
+
 class SpeakerError(PlayError):
     status = 502
 
@@ -270,7 +294,7 @@ class Player:
                 if mode == "replace":
                     coordinator.clear_queue()
                 first_index = coordinator.queue_size
-                coordinator.add_to_queue(queue_item(first, self.library.media_path(base, first.path), first_index))
+                coordinator.add_to_queue(queue_item(first, self.library.media_path(base, first.path, converted=first.needs_conversion), first_index))
                 if mode == "replace":
                     coordinator.play_from_queue(first_index)
             except PlayError:
@@ -375,7 +399,13 @@ class Player:
                     job.skipped.append({"path": str(path), "reason": f"can't read it as audio ({result})"[:200]})
                     job.total -= 1
                     continue
-                pending.append(queue_item(result, self.library.media_path(base, path), index + len(pending)))
+                try:
+                    url = self.library.media_path(base, path, converted=result.needs_conversion)
+                except PathNotAllowed:                           # its music folder was removed while this job ran (FR23)
+                    job.skipped.append({"path": str(path), "reason": "its music folder was removed"})
+                    job.total -= 1
+                    continue
+                pending.append(queue_item(result, url, index + len(pending)))
                 if len(pending) >= self.batch:
                     index += self._flush(job, coordinator, key, pending)
                     pending = []

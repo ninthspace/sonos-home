@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -91,6 +93,104 @@ def load(path: Path | None = None) -> Config:
     return Config(music_folders=tuple(resolved), port=port, room=room,
                   ffmpeg=data.get("ffmpeg"), ffprobe=data.get("ffprobe"),
                   extension_ids=tuple(ext_ids), pause_grace_minutes=float(grace), path=path)
+
+
+def resolve_entry(raw: str, path: Path) -> Path:
+    """A `music_folders` entry as `load` resolves it: `~` expanded, a relative one against the config file's folder, then the real path."""
+    folder = Path(raw).expanduser()
+    if not folder.is_absolute():
+        folder = path.parent / folder
+    return folder.resolve()
+
+
+def same_folder(a: Path, b: Path) -> bool:
+    """Two paths naming one folder: the same device and inode (so `~/Music` and `~/music` on a case-insensitive volume, or an NFC and an
+    NFD spelling, are one), or, when one doesn't exist, the same path after NFC and case folding."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return unicodedata.normalize("NFC", str(a)).casefold() == unicodedata.normalize("NFC", str(b)).casefold()
+
+
+def nested_folders(a: Path, b: Path) -> bool:
+    """True when one folder is inside the other (or they are the same path), comparing NFC and case-folded: on the Mac's usual volumes
+    `Music/Inner` and `music/inner` name one place, and so do an NFC and an NFD spelling."""
+    na, nb = Path(unicodedata.normalize("NFC", str(a)).casefold()), Path(unicodedata.normalize("NFC", str(b)).casefold())
+    return na.is_relative_to(nb) or nb.is_relative_to(na)
+
+
+def update_music_folders(path: Path, *, add: Path | None = None, remove: Path | None = None) -> list[str]:
+    """Edit only the top-level `music_folders` value of the config file, keeping every other byte (comments, order, other keys, line
+    endings), and return the entries as now written. `add` appends the folder's path; `remove` deletes every entry that resolves to that
+    folder, however it is spelled. A file that doesn't parse is not touched (ConfigError). The write is atomic: a temporary file in the
+    same folder, validated with `load`, then renamed over the real file (a symlinked config is written through, its mode kept)."""
+    import tomlkit
+    from tomlkit.items import AoT, Table
+
+    real = Path(os.path.realpath(path))
+    try:
+        text = real.read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        text = ""
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(f"{path}: {getattr(e, 'strerror', None) or e}") from e
+    try:
+        doc = tomlkit.parse(text)
+        before = tomllib.loads(text)
+    except (tomlkit.exceptions.TOMLKitError, tomllib.TOMLDecodeError) as e:
+        raise ConfigError(f"{path}: {e}") from e
+    entries = before.get("music_folders", [])
+    if not isinstance(entries, list) or not all(isinstance(x, str) for x in entries):
+        raise ConfigError(f"{path}: music_folders must be a list of strings")
+    arr = doc.get("music_folders")
+    if remove is not None and arr is not None:
+        for i in range(len(entries) - 1, -1, -1):
+            try:
+                hit = same_folder(resolve_entry(entries[i], path), remove)
+            except (RuntimeError, OSError, ValueError):
+                hit = False
+            if hit:
+                del arr[i]
+    if add is not None:
+        if arr is None:
+            arr = tomlkit.array()
+            at = next((i for i, (_, v) in enumerate(doc.body) if isinstance(v, (Table, AoT))), None)
+            if at is None:
+                doc["music_folders"] = arr
+            else:
+                try:
+                    doc._insert_at(at, "music_folders", arr)                   # a top-level key must come before the first table
+                except (AttributeError, TypeError, ValueError) as e:           # tomlkit's own insert API changed: refuse rather than guess
+                    raise ConfigError(f"{path}: can't add music_folders before the file's first table: add the line by hand") from e
+        arr.append(str(add))
+    new_text = tomlkit.dumps(doc)
+    try:
+        after = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"{path}: the edit would not parse: {e}") from e
+    rest_before, rest_after = dict(before), dict(after)
+    rest_before.pop("music_folders", None)
+    rest_after.pop("music_folders", None)
+    if rest_before != rest_after:
+        raise ConfigError(f"{path}: the edit would change more than music_folders")
+    real.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".config-", suffix=".tmp", dir=real.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(new_text.encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, real.stat().st_mode & 0o7777)                          # keep the file's mode
+        except FileNotFoundError:
+            pass
+        load(tmp)                                                                # the new file must be a config this service can read
+        os.replace(tmp, real)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return list(after.get("music_folders", []))
 
 
 def managed_binary(name: str) -> str | None:

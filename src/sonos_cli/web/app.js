@@ -13,6 +13,10 @@ let loading = 0;
 const state = {
   rooms: [], roomUid: store.get("room"), roots: [], path: "", parent: null,
   entries: [], nextOffset: null, filter: "", now: null, unreachable: false, draggingVolume: false, folderError: false,
+  anchor: null, holdUntil: 0, holdUid: null, frame: 0, meta: null,
+  jump: null, jumpNote: "", jumpNoteTimer: 0,
+  folders: { editable: false, list: [], configPath: "" }, folderBusy: false, fp: { path: "", parent: null },
+  seek: { dragging: false, preview: null, uid: null, pointerId: null, seq: 0, keyTarget: null, keyTimer: 0, holdUntil: 0, holdUid: null, noteTimer: 0 },
   view: "music", playlists: [], plOpen: null, plDetail: null, plConfirmDelete: false, plArmedAt: 0, plFocus: null,
 };
 
@@ -20,9 +24,10 @@ const state = {
 
 async function api(path, body, opts = {}) {
   // Reads give up after 3.5 s (the service is unreachable). Writes can legitimately take long (a hi-res file is
-  // converted first, an append waits for the previous queueing), so they get two minutes.
+  // converted first, an append waits for the previous queueing), so they get two minutes. `opts.timeout` lengthens a read
+  // whose service side has its own, longer limit (the folder picker's 5 s).
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), body === undefined ? 3500 : 120000);
+  const timer = setTimeout(() => ctl.abort(), body === undefined ? (opts.timeout || 3500) : 120000);
   try {
     const res = await fetch(path, body === undefined ? { signal: ctl.signal } : {
       method: "POST", signal: ctl.signal,
@@ -49,7 +54,7 @@ function setReachable(ok) {
   if (state.unreachable === !ok) return;
   state.unreachable = !ok;
   $("banner").hidden = ok;
-  if (!ok) { state.now = null; renderPlayer(); }
+  if (!ok) { state.now = null; state.anchor = null; renderPlayer(); }      // nothing to extrapolate from once the service is gone
   renderRooms();
 }
 
@@ -59,8 +64,7 @@ async function pollRooms() {
   try {
     state.rooms = await api("/api/rooms");
     if (!state.rooms.some((r) => r.uid === state.roomUid) && state.rooms.length) {
-      state.roomUid = state.rooms[0].uid;
-      store.set("room", state.roomUid);
+      selectRoom(state.rooms[0].uid);                                   // the selected room vanished: switch as a click would (queue, jump and seek state cleared)
     }
     renderRooms();
   } catch { /* the banner says so */ }
@@ -68,71 +72,157 @@ async function pollRooms() {
 
 const STRIP_COLOURS = ["#3d7bff", "#ff4fa3", "#2fe0a0", "#ff8a3d", "#a78bff", "#3ddcff"];
 
+const roomEls = new Map();         // uid -> { li, btn, name, word, led, fader, level }: a strip is built once and updated in place, so a poll can't take a fader out of a hand
+const faders = {};                 // uid -> the fader's send state
+function faderState(uid) { return faders[uid] || (faders[uid] = { dragging: false, inflight: false, next: null, last: 0, timer: 0, holdUntil: 0 }); }
+
+// A button released anywhere (off the fader, outside the window, after a context menu) must not leave a fader marked as held.
+for (const type of ["pointerup", "pointercancel"]) window.addEventListener(type, () => {
+  for (const f of Object.values(faders)) if (f.dragging) { f.dragging = false; f.holdUntil = performance.now() + 1000; }
+}, true);
+window.addEventListener("blur", () => { for (const f of Object.values(faders)) f.dragging = false; });
+
+function selectRoom(uid) {
+  resetSeek();
+  resetJump();
+  state.roomUid = uid;
+  store.set("room", uid);
+  state.queue = null; lastQueueCurrent = null;
+  renderQueue(); renderRooms(); pollState(); pollQueue();
+}
+
+// A strip's fader sets its group's volume (FR9). Requests: one in flight per room, at least 250 ms between starts, the newest value
+// sent when the last one returns, and the final value on release.
+function sendRoomVolume(uid, level) {
+  const f = faderState(uid);
+  f.next = level;
+  pumpRoomVolume(uid);
+}
+
+async function pumpRoomVolume(uid) {
+  const f = faderState(uid);
+  if (f.inflight || f.next === null) return;
+  const wait = 250 - (performance.now() - f.last);
+  if (wait > 0) { if (!f.timer) f.timer = setTimeout(() => { f.timer = 0; pumpRoomVolume(uid); }, wait); return; }
+  const level = f.next;
+  f.next = null; f.inflight = true; f.last = performance.now();
+  try { await api(`/api/rooms/${encodeURIComponent(uid)}/volume`, { level }); }
+  catch (e) { note(e.message, true); }
+  f.inflight = false;
+  if (f.next !== null) { pumpRoomVolume(uid); return; }
+  f.holdUntil = performance.now() + 1000;                  // a poll still carrying the old volume can't pull the fader back
+  pollRooms(); pollState();
+}
+
+function buildStrip(r) {
+  const uid = r.uid;
+  const li = document.createElement("li");
+  li.className = "room";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "strip";
+  btn.dataset.uid = uid;
+  const cap = document.createElement("span");
+  cap.className = "cap";
+  const name = document.createElement("span");
+  name.className = "rname";
+  const st = document.createElement("span");
+  st.className = "state";
+  const led = document.createElement("span");
+  led.className = "led";
+  const word = document.createElement("span");
+  st.append(led, word);
+  btn.append(cap, name, st);
+  const chan = document.createElement("div");
+  chan.className = "chan";
+  const meter = document.createElement("span");
+  meter.className = "meter";
+  meter.setAttribute("aria-hidden", "true");
+  const fader = document.createElement("input");
+  fader.type = "range"; fader.min = "0"; fader.max = "100"; fader.step = "1"; fader.className = "strip-fader";
+  chan.append(meter, fader);
+  const level = document.createElement("span");
+  level.className = "vol";
+  level.setAttribute("aria-hidden", "true");
+  li.append(btn, chan, level);
+  li.addEventListener("click", (ev) => { if (!ev.target.closest(".strip-fader")) selectRoom(uid); });          // anywhere on the strip but the fader selects the room
+  fader.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0) return;                                                 // a right-click or ctrl-click is not a drag
+    try { fader.setPointerCapture(ev.pointerId); } catch { /* a synthetic pointer */ }
+    faderState(uid).dragging = true;
+  });
+  const released = () => { const f = faderState(uid); if (!f.dragging) return; f.dragging = false; f.holdUntil = performance.now() + 1000; };
+  fader.addEventListener("pointerup", released);
+  fader.addEventListener("pointercancel", released);
+  fader.addEventListener("lostpointercapture", released);
+  fader.addEventListener("input", () => {
+    const f = faderState(uid), v = Number(fader.value);
+    f.holdUntil = performance.now() + 1000;
+    level.textContent = String(v);
+    sendRoomVolume(uid, v);
+  });
+  return { li, btn, name, word, led, fader, level };
+}
+
+function updateStrip(el, r, order) {
+  const { li, btn, name, word, fader, level } = el;
+  const members = r.members.filter((m) => m.visible).length;
+  const hasVol = typeof r.volume === "number";
+  btn.style.setProperty("--cap", STRIP_COLOURS[order.indexOf(r.uid) % STRIP_COLOURS.length]);
+  li.style.setProperty("--vol", String(hasVol ? r.volume : 0));
+  name.textContent = r.name;
+  if (members > 1) {
+    const plus = document.createElement("span");
+    plus.className = "plus";
+    plus.textContent = `+${members - 1}`;
+    name.append(plus);
+  }
+  word.textContent = state.unreachable ? "Unknown" : !r.online ? "Offline" : r.state === "PLAYING" ? "Playing" : r.state === "PAUSED_PLAYBACK" ? "Paused" : "Stopped";
+  btn.setAttribute("aria-current", String(r.uid === state.roomUid));
+  btn.setAttribute("aria-label", `${r.name}${members > 1 ? ` and ${members - 1} more` : ""}, ${word.textContent.toLowerCase()}${hasVol ? `, volume ${r.volume}` : ""}`);
+  li.classList.toggle("sel", r.uid === state.roomUid);
+  li.classList.toggle("playing", r.state === "PLAYING" && r.online && !state.unreachable);
+  li.classList.toggle("paused", r.state === "PAUSED_PLAYBACK" && r.online && !state.unreachable);
+  li.classList.toggle("offline", !r.online);
+  li.classList.toggle("novol", !hasVol);
+  const usable = r.online && hasVol && !state.unreachable;
+  if (fader.disabled === usable) fader.disabled = !usable;
+  fader.setAttribute("aria-disabled", String(!usable));
+  fader.setAttribute("aria-label", `${r.name} volume`);
+  const f = faderState(r.uid);
+  if (!f.dragging && !f.inflight && f.next === null && performance.now() >= f.holdUntil && hasVol) {
+    if (fader.value !== String(r.volume)) fader.value = String(r.volume);
+    level.textContent = String(r.volume);
+  } else if (!hasVol) {
+    level.textContent = "–";
+  }
+}
+
 function renderRooms() {
   const ul = $("room-list");
-  const focused = ul.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.uid : null;
-  ul.replaceChildren();
   if (!state.rooms.length) {
     const li = document.createElement("li");
     li.textContent = state.unreachable ? "Rooms unknown while the service is unreachable." : "No rooms found yet. Searching the network…";
     li.className = "none";
-    ul.append(li);
-  }
-  const order = state.rooms.map((r) => r.uid).sort();                 // a room keeps its colour when others are renamed
-  for (const r of state.rooms) {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "strip";
-    btn.dataset.uid = r.uid;
-    btn.style.setProperty("--cap", STRIP_COLOURS[order.indexOf(r.uid) % STRIP_COLOURS.length]);
-    const vol = typeof r.volume === "number" ? r.volume : 0;
-    btn.style.setProperty("--vol", String(vol));
-    const cap = document.createElement("span");
-    cap.className = "cap";
-    const name = document.createElement("span");
-    name.className = "rname";
-    const members = r.members.filter((m) => m.visible).length;
-    name.textContent = r.name;
-    if (members > 1) {
-      const plus = document.createElement("span");
-      plus.className = "plus";
-      plus.textContent = `+${members - 1}`;
-      name.append(plus);
+    ul.replaceChildren(li);
+    roomEls.clear();
+  } else {
+    const none = ul.querySelector("li.none");
+    if (none) none.remove();
+    const order = state.rooms.map((r) => r.uid).sort();                 // a room keeps its colour when others are renamed
+    const seen = new Set();
+    let prev = null;
+    for (const r of state.rooms) {
+      let el = roomEls.get(r.uid);
+      if (!el) { el = buildStrip(r); roomEls.set(r.uid, el); }
+      updateStrip(el, r, order);
+      const want = prev ? prev.nextSibling : ul.firstChild;
+      if (el.li !== want) ul.insertBefore(el.li, want);                  // moved only when out of place (a moved strip would lose focus)
+      prev = el.li;
+      seen.add(r.uid);
     }
-    const st = document.createElement("span");
-    st.className = "state";
-    const led = document.createElement("span");
-    led.className = "led";
-    const word = document.createElement("span");
-    word.textContent = state.unreachable ? "Unknown" : !r.online ? "Offline" : r.state === "PLAYING" ? "Playing" : r.state === "PAUSED_PLAYBACK" ? "Paused" : "Stopped";
-    st.append(led, word);
-    const chan = document.createElement("span");
-    chan.className = "chan";
-    chan.setAttribute("aria-hidden", "true");
-    const meter = document.createElement("span");
-    meter.className = "meter";
-    const slot = document.createElement("span");
-    slot.className = "slot";
-    const knob = document.createElement("span");
-    knob.className = "knob";
-    slot.append(knob);
-    chan.append(meter, slot);
-    const level = document.createElement("span");
-    level.className = "vol";
-    level.textContent = typeof r.volume === "number" ? String(r.volume) : "–";
-    btn.append(cap, name, st, chan, level);
-    btn.setAttribute("aria-current", String(r.uid === state.roomUid));
-    btn.setAttribute("aria-label", `${r.name}${members > 1 ? ` and ${members - 1} more` : ""}, ${word.textContent.toLowerCase()}${typeof r.volume === "number" ? `, volume ${r.volume}` : ""}`);
-    if (r.state === "PLAYING" && r.online && !state.unreachable) li.classList.add("playing");
-    if (r.state === "PAUSED_PLAYBACK" && r.online && !state.unreachable) li.classList.add("paused");
-    if (!r.online) li.classList.add("offline");
-    if (typeof r.volume !== "number") li.classList.add("novol");
-    btn.addEventListener("click", () => { state.roomUid = r.uid; store.set("room", r.uid); state.queue = null; lastQueueCurrent = null; renderQueue(); renderRooms(); pollState(); pollQueue(); });
-    li.append(btn);
-    ul.append(li);
+    for (const [uid, el] of roomEls) if (!seen.has(uid)) { el.li.remove(); roomEls.delete(uid); delete faders[uid]; }
   }
-  if (focused) { const again = ul.querySelector(`[data-uid="${CSS.escape(focused)}"]`); if (again) again.focus({ preventScroll: true }); }     // a re-render must not drop keyboard focus
   updatePlayLabel();                                       // the Play buttons in the playlist editor and Web page view name the room
   if (state.view === "rooms") renderRoomsPanel(false);
 }
@@ -149,6 +239,7 @@ async function pollState() {
   if (asked !== state.roomUid) return;                    // the room was switched while this was in flight
   const prevIndex = state.now && state.now.track ? state.now.track.index : null;
   state.now = now;
+  reanchor(now);
   renderPlayer();
   markCurrent();
   const idx = now && now.track ? now.track.index : null;
@@ -176,6 +267,168 @@ function clock(t) {
   return h ? `${h}:${m[2]}:${sec}` : `${min}:${sec}`;
 }
 
+function clockSecs(total) {
+  const t = Math.max(0, Math.floor(total)), h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60), sec = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
+}
+
+// ---- the position between polls -----------------------------------------------------------------------
+// A speaker is read every 2 s at best, and the reading the service hands out can already be a poll old. So the bar and the time are
+// drawn from the reading's age (the service's `now` minus its `updated`, both on the Mac's clock) plus the time since the answer
+// arrived, and a reading moves them only when it is a new one: the same cached reading repeated can't pull them back.
+
+function shownPosition() {
+  const a = state.anchor;
+  if (!a || a.uid !== state.roomUid) return null;                                 // a reading of another room (just switched from) is not drawn
+  if (state.seek.preview !== null && state.seek.uid === state.roomUid) return Math.min(a.total, Math.max(0, state.seek.preview));      // where the pointer or the keys have put it
+  const playing = a.state === "PLAYING" && a.reachable && !state.unreachable;
+  return Math.min(a.total, Math.max(0, a.position + (playing ? a.age + (performance.now() - a.at) / 1000 : 0)));
+}
+
+function reanchor(n) {
+  const total = seconds(n && n.duration);
+  const prev = state.anchor, shown = shownPosition();
+  if (!n || !(total > 0)) { state.anchor = null; return; }                       // no duration (a stream): nothing to draw
+  const index = n.track ? n.track.index : null, reachable = n.reachable !== false;
+  if (prev && prev.uid === state.roomUid && prev.updated === n.updated && prev.state === n.state && prev.index === index &&
+      prev.total === total && prev.reachable === reachable) return;               // the monitor handed out the same reading again
+  if (performance.now() < state.holdUntil && state.holdUid === state.roomUid && n.state === "PLAYING") return;       // a reading from before a Pause that just succeeded
+  const age = typeof n.now === "number" && typeof n.updated === "number" ? Math.max(0, n.now - n.updated) : 0;
+  if (performance.now() < state.seek.holdUntil && state.seek.holdUid === state.roomUid && shown !== null && Math.abs(seconds(n.position) + age - shown) > 3) return;    // a poll in flight from before a seek
+  let position = seconds(n.position);
+  const playing = n.state === "PLAYING" && reachable;
+  let at = performance.now();
+  if (playing && prev && prev.uid === state.roomUid && prev.index === index && prev.total === total && prev.state === "PLAYING") {
+    const fresh = position + age;
+    if (shown !== null && fresh < shown && shown - fresh <= 1.5) { position = shown; at = performance.now(); state.anchor = { uid: state.roomUid, updated: n.updated, state: n.state, index, total, position, age: 0, at, reachable }; return; }
+  }
+  state.anchor = { uid: state.roomUid, updated: n.updated, state: n.state, index, total, position, age, at, reachable };
+}
+
+let drawnSecond = -1, drawnWidth = "";
+function drawProgress(force) {
+  const a = state.anchor, pos = shownPosition();
+  const pct = pos === null ? 0 : (pos / a.total) * 100;
+  const width = `${pct.toFixed(3)}%`;
+  if (width !== drawnWidth) { drawnWidth = width; $("progress-fill").style.width = width; $("progress-thumb").style.left = width; }
+  const whole = pos === null ? -1 : Math.floor(pos);
+  if (force || whole !== drawnSecond) {                                           // the time text and the slider's values change once a second at most
+    drawnSecond = whole;
+    const bar = $("progress");
+    const set = (k, v) => { if (bar.getAttribute(k) !== v) bar.setAttribute(k, v); };      // only when it changed
+    set("aria-valuemax", String(pos === null ? 0 : a.total));
+    set("aria-valuenow", String(whole < 0 ? 0 : whole));
+    set("aria-valuetext", pos === null ? "" : `${clockSecs(whole)} of ${clockSecs(a.total)}`);
+    set("aria-disabled", String(!seekable()));
+    renderMeta();
+  }
+}
+
+// ---- seek: click or drag on the bar, or the keys on it --------------------------------------------------
+function seekable() {
+  const a = state.anchor;       // only with a track that has a length, in a room that is playing or paused and answering
+  return !!a && a.uid === state.roomUid && a.reachable && !state.unreachable && (a.state === "PLAYING" || a.state === "PAUSED_PLAYBACK");
+}
+
+function barPosition(ev) {
+  const r = $("progress").getBoundingClientRect(), total = state.anchor.total;
+  const f = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  return Math.min(total - 1, Math.floor(f * total));                              // never the very end: a click at the right edge isn't refused
+}
+
+function resetSeek() {                                                              // a room switch: nothing pending belongs to the new room
+  clearTimeout(state.seek.keyTimer);
+  Object.assign(state.seek, { dragging: false, preview: null, uid: null, pointerId: null, keyTarget: null, keyTimer: 0 });
+  seekNote("");
+}
+
+function seekNote(text) {
+  const el = $("seek-note");                                                         // kept rendered (empty) so a screen reader announces a change
+  clearTimeout(state.seek.noteTimer);
+  el.textContent = text;
+  if (text) state.seek.noteTimer = setTimeout(() => seekNote(""), 6000);
+}
+
+async function sendSeek(pos, uid) {
+  if (uid !== state.roomUid) return;                                               // the room was switched since the pointer or key was used
+  const mine = ++state.seek.seq;
+  state.seek.keyTarget = null;
+  try {
+    await api(`/api/rooms/${encodeURIComponent(uid)}/seek`, { position: pos });
+    if (mine !== state.seek.seq) return;                                           // a later seek is in flight: it settles the bar
+    seekNote("");
+    if (state.anchor && state.anchor.uid === uid) Object.assign(state.anchor, { position: pos, age: 0, at: performance.now() });
+    state.seek.holdUntil = performance.now() + 1500;                              // readings from before the seek can't pull the bar back
+    state.seek.holdUid = uid;
+  } catch (e) {
+    if (mine !== state.seek.seq) return;
+    seekNote(e.message);                                                           // the bar returns to the room's own position below
+  }
+  if (state.seek.keyTimer === 0 && !state.seek.dragging) state.seek.preview = null;
+  drawProgress(true);
+  pollState();
+}
+
+(function wireSeek() {
+  const bar = $("progress");
+  bar.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0 || !seekable() || state.seek.dragging) return;
+    try { bar.setPointerCapture(ev.pointerId); } catch { /* a synthetic pointer: carry on without capture */ }
+    clearTimeout(state.seek.keyTimer);
+    state.seek.keyTimer = 0;
+    Object.assign(state.seek, { dragging: true, uid: state.roomUid, pointerId: ev.pointerId, preview: barPosition(ev) });
+    drawProgress(true);
+    ev.preventDefault();
+  });
+  const endDrag = () => { state.seek.dragging = false; state.seek.preview = null; state.seek.pointerId = null; drawProgress(true); };
+  bar.addEventListener("pointermove", (ev) => {
+    if (!state.seek.dragging || ev.pointerId !== state.seek.pointerId) return;
+    if (!seekable() || state.seek.uid !== state.roomUid) return endDrag();          // the track or the service went away mid-drag
+    state.seek.preview = barPosition(ev);
+    drawProgress(false);
+  });
+  bar.addEventListener("pointerup", (ev) => {
+    if (!state.seek.dragging || ev.pointerId !== state.seek.pointerId) return;
+    if (!seekable() || state.seek.uid !== state.roomUid) return endDrag();
+    state.seek.dragging = false;
+    state.seek.pointerId = null;
+    state.seek.preview = barPosition(ev);
+    sendSeek(state.seek.preview, state.seek.uid);
+  });
+  bar.addEventListener("pointercancel", endDrag);
+  bar.addEventListener("keydown", (ev) => {
+    if (!seekable() || state.seek.dragging) return;
+    const uid = state.roomUid, total = state.anchor.total, cur = state.seek.keyTarget !== null ? state.seek.keyTarget : Math.floor(shownPosition());
+    let t = null;
+    if (ev.key === "ArrowRight" || ev.key === "ArrowUp") t = cur + 10;
+    else if (ev.key === "ArrowLeft" || ev.key === "ArrowDown") t = cur - 10;
+    else if (ev.key === "Home") t = 0;
+    else if (ev.key === "End") t = total - 1;
+    if (t === null) return;
+    ev.preventDefault();
+    t = Math.min(total - 1, Math.max(0, t));
+    state.seek.keyTarget = t;
+    state.seek.preview = t;
+    state.seek.uid = uid;
+    drawProgress(true);
+    clearTimeout(state.seek.keyTimer);
+    state.seek.keyTimer = setTimeout(() => { state.seek.keyTimer = 0; sendSeek(t, uid); }, 300);        // one seek, 300 ms after the last key
+  });
+})();
+
+function frame() { state.frame = requestAnimationFrame(frame); drawProgress(false); }
+
+function renderMeta() {
+  const m = state.meta;
+  if (!m) return;
+  const parts = [m.source, m.word];
+  if (m.shown) {
+    const pos = shownPosition();
+    parts.push(pos === null ? `${clock(m.position)} / ${clock(m.duration)}` : `${clockSecs(pos)} / ${clockSecs(state.anchor.total)}`);
+  }
+  $("np-meta").textContent = parts.join(", ");
+}
+
 function sourceLabel(src) {
   if (src === "ours") return "this Mac";
   if (src && src.startsWith("other-host:")) return "from " + src.slice("other-host:".length);
@@ -195,17 +448,15 @@ function renderPlayer() {
     const shown = t.title || queueTitle(t.index);      // a track with no title tag reports none (the service drops its URL file name): use the queue's cleaned label
     $("np-title").textContent = shown || (n.state === "STOPPED" ? "Nothing playing" : "Playing");
     if (shown && shown !== lastAnnounced) { lastAnnounced = shown; $("announce").textContent = `Now playing ${shown}`; }
-    const parts = [sourceLabel(n.source), n.state === "PLAYING" ? "playing" : n.state === "PAUSED_PLAYBACK" ? "paused" : "stopped"];
-    if (shown) parts.push(`${clock(n.position)} / ${clock(n.duration)}`);
-    $("np-meta").textContent = parts.join(", ");
+    state.meta = { source: sourceLabel(n.source), word: n.state === "PLAYING" ? "playing" : n.state === "PAUSED_PLAYBACK" ? "paused" : "stopped",
+                   shown, position: n.position, duration: n.duration };
+    renderMeta();
   }
+  if (state.unreachable || !n) state.meta = null;
   const toggle = $("toggle");
   toggle.querySelector("path").setAttribute("d", live ? "M6 4h4.5v16H6zM13.5 4H18v16h-4.5z" : "M7 4.5v15l12-7.5z");
   toggle.setAttribute("aria-label", live ? "Pause" : "Play");
-  const total = seconds(n && n.duration), at = seconds(n && n.position);
-  const pct = total > 0 ? Math.min(100, Math.round((at / total) * 100)) : 0;
-  $("progress-fill").style.width = `${pct}%`;
-  $("progress").setAttribute("aria-valuenow", String(pct));
+  drawProgress(true);
   if (n && !state.draggingVolume && typeof n.volume === "number") {
     $("volume").value = n.volume;
     $("volume-out").textContent = n.volume;
@@ -216,7 +467,16 @@ function renderPlayer() {
 
 async function transport(action) {
   if (!state.roomUid) return;
-  try { await api(`/api/rooms/${encodeURIComponent(state.roomUid)}/transport`, { action }); }
+  if (action !== "pause" && action !== "stop") state.holdUntil = 0;              // Play, Next and Previous must be seen at once
+  try {
+    await api(`/api/rooms/${encodeURIComponent(state.roomUid)}/transport`, { action });
+    if ((action === "pause" || action === "stop") && state.anchor) {              // stop the bar now, not when the next reading says so
+      Object.assign(state.anchor, { position: shownPosition(), state: action === "pause" ? "PAUSED_PLAYBACK" : "STOPPED", age: 0, at: performance.now() });
+      state.holdUntil = performance.now() + 1500;
+      state.holdUid = state.roomUid;
+      drawProgress(true);
+    }
+  }
   catch (e) { note(e.message, true); }
   pollState(); pollRooms();
 }
@@ -249,13 +509,55 @@ async function pollQueue() {
   renderQueue();
 }
 
+// ---- jumping to a queue item ----------------------------------------------------------------------------
+// One jump at a time: a double-click, or a click on another row while one is pending, sends nothing more. The row is marked pending in
+// the same task as the click, the page asks for state and queue the moment the speaker answers, and a failure says why.
+function jumpNote(text) {
+  clearTimeout(state.jumpNoteTimer);
+  state.jumpNote = text;
+  if (text) state.jumpNoteTimer = setTimeout(() => { state.jumpNote = ""; renderQueue(); }, 10000);
+}
+
+function resetJump() { state.jump = null; jumpNote(""); $("queue-note").textContent = ""; $("queue-note").classList.remove("error"); }
+
+async function jumpTo(index) {
+  if (state.jump) return;
+  const uid = state.roomUid, mine = { uid, index };
+  state.jump = mine;
+  renderQueue();
+  let timedOut = false;
+  const giveUp = setTimeout(() => {                                               // the speaker has not answered: stop showing it as pending
+    if (state.jump !== mine) return;
+    timedOut = true;
+    state.jump = null;
+    jumpNote("The speaker hasn't answered yet. Check the queue in a moment.");
+    renderQueue();
+  }, 10000);
+  let error = "";
+  try { await api(`/api/rooms/${encodeURIComponent(uid)}/queue/jump`, { index }); }
+  catch (e) { error = e.message; }
+  clearTimeout(giveUp);
+  const stillMine = state.jump === mine;
+  if (stillMine) state.jump = null;                                                 // always: the room may have changed by a route that never calls resetJump
+  if (uid !== state.roomUid) return;                                               // the room was switched meanwhile
+  if (!stillMine && state.jump) return;                                            // a newer jump is pending: this late answer doesn't speak for the queue
+  if (error) jumpNote(error);
+  else if (!timedOut || state.jumpNote) {
+    jumpNote("");
+    if (state.queue && state.queue.items.some((it) => it.index === index)) state.queue.current = index;      // current at once; the next reading confirms
+  }
+  renderQueue();
+  pollState(); pollQueue();
+}
+
 function renderQueue() {
   const ol = $("queue-list");
   const had = ol.contains(document.activeElement) ? [...ol.querySelectorAll("button")].indexOf(document.activeElement) : -1;
   ol.replaceChildren();
   const q = state.queue;
   if (!q) { $("clear-queue").hidden = true; return; }
-  $("queue-note").textContent = q.items.length ? "" : "The queue is empty. Play something to fill it.";
+  $("queue-note").textContent = state.jumpNote || (q.items.length ? "" : "The queue is empty. Play something to fill it.");
+  $("queue-note").classList.toggle("error", !!state.jumpNote);
   $("clear-queue").hidden = !q.items.length;
   for (const it of q.items) {
     const li = document.createElement("li");
@@ -263,6 +565,7 @@ function renderQueue() {
     const b = document.createElement("button");
     b.type = "button";
     b.setAttribute("aria-current", String(it.index === q.current));
+    if (state.jump && state.jump.uid === state.roomUid && state.jump.index === it.index) b.setAttribute("aria-busy", "true");      // the pending mark survives a re-render
     const pos = document.createElement("span");
     pos.className = "pos";
     pos.textContent = String(it.index + 1);
@@ -275,11 +578,7 @@ function renderQueue() {
       from.textContent = `from ${it.host}`;
       b.append(from);
     }
-    b.addEventListener("click", async () => {
-      try { await api(`/api/rooms/${encodeURIComponent(state.roomUid)}/queue/jump`, { index: it.index }); }
-      catch (e) { note(e.message, true); }
-      pollState(); pollQueue();
-    });
+    b.addEventListener("click", (ev) => { if (ev.detail > 1) return; jumpTo(it.index); });      // the second click of a double-click is not another jump (Enter has detail 0)
     li.append(b);
     ol.append(li);
   }
@@ -388,7 +687,177 @@ function renderCrumbs() {
 
 function fmtSize(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " kB"; }
 
+// ---- music folders: list, add, remove (FR23) --------------------------------------------------------------------
+// The service allows changes only from the Mac itself and says so in `editable`; from another device the list is read-only.
+
+async function loadFolders() {
+  try {
+    const r = await api("/api/folders", undefined, { slow: true, timeout: 8000 });     // the service stats each root: a dead mount is slow, not a dead service
+    state.folders = { editable: !!r.editable, list: r.folders || [], configPath: r.config_path || "" };
+  } catch { /* keep what we had; other polls raise the unreachable banner */ }
+  renderFolders();
+}
+
+function folderNote(text, isError) {
+  const el = $("folder-note");
+  el.textContent = text || "";
+  el.classList.toggle("error", !!isError);
+}
+
+function renderFolders() {
+  const f = state.folders, atRoot = state.path === "";
+  const sec = $("folders");
+  sec.hidden = !(atRoot && f.list.length);
+  $("add-folder").hidden = !f.editable;
+  const ul = $("folder-list");
+  ul.replaceChildren();
+  for (const it of f.list) {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "fname";
+    name.textContent = it.name;
+    const path = document.createElement("span");
+    path.className = "fpath";
+    path.textContent = it.path;
+    li.append(name, path);
+    if (!it.exists) {
+      const miss = document.createElement("span");
+      miss.className = "missing";
+      miss.textContent = "not found";
+      li.append(miss);
+    }
+    if (f.editable) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "quiet";
+      b.textContent = "Remove";
+      b.setAttribute("aria-label", `Remove ${it.name} from the music folders`);
+      b.addEventListener("click", () => openRemove(it));
+      li.append(b);
+    }
+    ul.append(li);
+  }
+  if (!f.editable && f.list.length) folderNote(`Folders are changed on the Mac itself, in ${f.configPath || "its config file"}.`);
+  else if (!$("folder-note").classList.contains("error")) folderNote("");
+  // the empty view: Add folder where the Mac can change folders, the config file by hand elsewhere
+  $("empty-add").hidden = !f.editable;
+  $("empty-by-hand").hidden = f.editable;
+}
+
+function busyFolders(on) {
+  state.folderBusy = on;
+  for (const id of ["add-folder", "empty-add", "fp-add-path", "fr-confirm"]) $(id).disabled = on;
+  $("fp-use").disabled = on || !(state.fp && state.fp.path);
+}
+
+async function changeFolders(path, what, noteEl) {
+  if (state.folderBusy) return false;                                            // one change at a time, however often a key is pressed
+  busyFolders(true);
+  try {
+    const r = await api(`/api/folders/${what}`, { path });
+    state.folders = { ...state.folders, editable: true, list: r.folders || [] };
+    await loadFolder("");                                                        // the listing now has (or lacks) the folder
+    renderFolders();
+    return true;
+  } catch (e) {
+    noteEl.textContent = e.message;
+    return false;
+  } finally {
+    busyFolders(false);
+  }
+}
+
+let fpSeq = 0;
+async function fpLoad(path, focusList = true) {
+  const mine = ++fpSeq;                                                          // only the latest request may draw
+  $("fp-note").textContent = "";
+  try {
+    const r = await api(`/api/folders/browse?path=${encodeURIComponent(path)}`, undefined, { slow: true, timeout: 8000 });
+    if (mine !== fpSeq) return;
+    state.fp = { path: r.path, parent: r.parent };
+    $("fp-where").textContent = r.path || "Pick a place to start looking.";
+    $("fp-use").disabled = state.folderBusy || !r.path;
+    $("fp-up").disabled = !r.path;
+    const ul = $("fp-list");
+    ul.replaceChildren();
+    for (const e of r.entries) {
+      const li = document.createElement("li");
+      if (e.readable) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = e.name;
+        b.addEventListener("click", () => fpLoad(e.path));
+        li.append(b);
+      } else {
+        li.className = "locked";
+        const n = document.createElement("span");
+        n.textContent = e.name;
+        const why = document.createElement("span");
+        why.textContent = "can't open here";
+        li.append(n, why);
+      }
+      ul.append(li);
+    }
+    if (!r.entries.length) { const li = document.createElement("li"); li.className = "none"; li.textContent = "No folders in here."; ul.append(li); }
+    const ae = document.activeElement;                                             // don't take focus from a field being typed in
+    if (focusList && (!ae || ae === document.body || ae === $("fp-where") || ul.contains(ae) || ae.id === "fp-up")) (ul.querySelector("button") || $("fp-where")).focus();          // the button that was pressed is gone: keep the keyboard in the dialog
+  } catch (e) {
+    if (mine !== fpSeq) return;
+    $("fp-note").textContent = e.name === "AbortError" ? "That folder is taking too long to answer. Try another." : e.message;
+  }
+}
+
+function openFolderPicker() {
+  $("fp-path").value = "";
+  $("fp-note").textContent = "";
+  $("fp-list").replaceChildren();                                                // nothing stale from the last time
+  state.fp = { path: "", parent: "" };
+  $("fp-where").textContent = "Looking…";
+  $("fp-use").disabled = true;
+  $("fp-up").disabled = true;
+  $("folder-picker").showModal();
+  fpLoad("");
+}
+
+async function addFromPicker(path) {
+  if (!path) return;
+  if (await changeFolders(path, "add", $("fp-note"))) {
+    $("folder-picker").close();
+    folderNote(`Added ${path}.`);
+    ($("folders").hidden ? $("empty-add") : $("add-folder")).focus();
+    $("announce").textContent = `Added music folder ${path}`;
+  }
+}
+
+let removing = null;
+function openRemove(item) {
+  removing = item;
+  $("fr-what").textContent = item.path;
+  $("fr-note").textContent = "";
+  $("folder-remove").showModal();
+}
+
+$("add-folder").addEventListener("click", openFolderPicker);
+$("empty-add").addEventListener("click", openFolderPicker);
+$("fp-up").addEventListener("click", () => fpLoad(state.fp.parent || ""));
+$("fp-use").addEventListener("click", () => addFromPicker(state.fp.path));
+$("fp-add-path").addEventListener("click", () => addFromPicker($("fp-path").value.trim()));
+$("fp-path").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); addFromPicker($("fp-path").value.trim()); } });
+$("fr-confirm").addEventListener("click", async () => {
+  const gone = removing;
+  if (!gone) return;
+  if (await changeFolders(gone.path, "remove", $("fr-note"))) {
+    $("folder-remove").close();
+    folderNote(`Removed ${gone.path}.`);
+    $("announce").textContent = `Removed music folder ${gone.path}`;
+    removing = null;
+    // the Remove button went with its row; the last folder going hides the whole section, so pick by what is showing
+    ($("folders").hidden ? $("empty-add") : $("add-folder")).focus();
+  }
+});
+
 function renderListing() {
+  renderFolders();
   renderCrumbs();
   const ul = $("listing");
   ul.replaceChildren();
@@ -452,7 +921,7 @@ function markCurrent() {
     let hit = false;
     if (li.dataset.path && root && uri && state.now.state === "PLAYING") {
       const rel = li.dataset.path.slice(root.length).normalize("NFC");     // "/GLDR/01 Halyard.wav"
-      hit = new RegExp("/media/[^/]+" + rel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$").test(uri);
+      hit = new RegExp("/media/[^/]+" + rel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(\\.flac)?$").test(uri);      // a converted file's URL adds .flac
     }
     li.classList.toggle("current", hit);
   }
@@ -814,7 +1283,10 @@ function renderRoomsPanel(force) {
               roomAction(`/api/rooms/${encodeURIComponent(m.uid)}/group`, { into: pick.value }, `${m.name} joined ${visibleMembers(target).map((x) => x.name).join(" + ") || target.name}.`, `rename-${m.uid}`);
             }, true);
             join.setAttribute("aria-label", `Group ${m.name} with the chosen room`);
-            acts.append(pick, join);
+            const wrap = document.createElement("span");                         // a <select> has no ::after: the chevron lives on this wrapper
+            wrap.className = "key-select";
+            wrap.append(pick);
+            acts.append(wrap, join);
           }
         }
         row.append(name, acts);
@@ -944,11 +1416,15 @@ $("next").addEventListener("click", () => transport("next"));
 $("volume").addEventListener("input", (ev) => { state.draggingVolume = true; setVolume(ev.target.value); });
 $("volume").addEventListener("change", () => { setTimeout(() => { state.draggingVolume = false; }, 600); });
 
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollState(); });      // a tab back from the background: don't draw a track that ended meanwhile
+
 (async function start() {
   await pollRooms();
+  await loadFolders();
   await loadFolder("");
   await pollState();
   pollQueue();
+  frame();
   setInterval(pollState, 2000);
   setInterval(pollQueue, 5000);
   setInterval(pollRooms, 5000);

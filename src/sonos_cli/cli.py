@@ -56,6 +56,8 @@ def _parser() -> argparse.ArgumentParser:
     service_sub = service.add_subparsers(dest="service_command", required=True)
     run = service_sub.add_parser("run", help="run the service in the foreground")
     run.add_argument("--fake-rooms", action="store_true", help="use an in-memory Sonos system (development and tests)")
+    run.add_argument("--no-local-clients", action="store_true",
+                     help="with --fake-rooms: treat every client, even localhost, as another device (to see the read-only folder view)")
     run.add_argument("--host", default="0.0.0.0")
     run.add_argument("-p", "--port", type=int, default=None, help="port (default: config.toml, else 8737)")
     run.set_defaults(func=cmd_service_run)
@@ -255,7 +257,10 @@ def cmd_service_status(args) -> int:
 
 def cmd_service_run(args) -> int:
     from . import service
-    return service.run(config.get(), host=args.host, port=args.port, fake_rooms=args.fake_rooms)
+    if args.no_local_clients and not args.fake_rooms:
+        print("sonos: --no-local-clients only works with --fake-rooms", file=sys.stderr)
+        return 2
+    return service.run(config.get(), host=args.host, port=args.port, fake_rooms=args.fake_rooms, no_local_clients=args.no_local_clients)
 
 
 def _serve_until_done(coordinator, our_prefix: str, count: int, idle_limit: float) -> None:

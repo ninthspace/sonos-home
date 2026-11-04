@@ -6,9 +6,12 @@ One Starlette app (AD1). Blocking work (ffprobe, ffmpeg, SoCo) runs in worker th
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import math
 import os
 import re
+import stat as stat_mod
 import socket
 import threading
 import time
@@ -27,7 +30,7 @@ from starlette.routing import Mount, Route, WebSocketRoute
 
 from . import config as config_mod
 from . import media
-from .library import Library, PathNotAllowed
+from .library import Library, LiveLibrary, PathNotAllowed
 from . import playback
 from .playback import PlayError, Player
 from . import live as live_mod
@@ -50,6 +53,7 @@ class WebFiles(StaticFiles):
         return response
 
 STATE_CHANGING = {"POST", "PUT", "PATCH", "DELETE"}
+BROWSE_TIMEOUT_S = 5          # a folder listing (FR23) that takes longer, e.g. a disconnected network share, is answered 504
 MAX_BODY_BYTES = 12_000_000     # a page's HTML (capped at 5 MB) in a JSON body, with room for escaping, is the biggest request any route takes
 
 
@@ -201,6 +205,17 @@ class MediaServer:
             is_file = path.is_file()
         except OSError:                          # e.g. a name over the filesystem's limit
             is_file = False
+        suffixed = False
+        if not is_file and rel.lower().endswith(".flac"):
+            # `<name>.<ext>.flac` is how a URL names a file that is converted to FLAC (Library.media_path): the file that exists
+            # is `<name>.<ext>`. A path that exists as written is always served as itself, so this can't hide a real `.flac`.
+            try:
+                source = self.library.resolve_media(rid, rel[:-len(".flac")])
+                suffixed = source.suffix.lower() in media.AUDIO_EXTENSIONS and source.suffix.lower() != ".flac" and source.is_file()
+            except (KeyError, PathNotAllowed, OSError):
+                suffixed = False
+            if suffixed:
+                path, is_file = source, True
         if not is_file:
             return PlainTextResponse("not found", status_code=404)
         try:
@@ -211,6 +226,8 @@ class MediaServer:
             return PlainTextResponse("audio tools unavailable or file gone", status_code=503)
         except OSError:
             return PlainTextResponse("file unavailable", status_code=503)
+        if suffixed and not track.needs_conversion:            # `a.wav.flac` for a WAV that is served as it is: no such file
+            return PlainTextResponse("not found", status_code=404)
         try:
             if track.needs_conversion:
                 lock = self._locks.setdefault(str(path), asyncio.Lock())
@@ -234,10 +251,12 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
                rooms_seen: Callable[[], int] | None = None, monitor: RoomMonitor | None = None,
                player: Player | None = None, port: int | None = None,
                sleep: SleepAssertion | None = None, media_only: bool = False,
-               fetcher: remote_mod.Fetcher | None = None) -> Starlette:
+               fetcher: remote_mod.Fetcher | None = None, fake_system=None, no_local_clients: bool = False) -> Starlette:
     cfg = cfg or config_mod.get()
     if library is None:
         library = Library.create(cfg.music_folders, (media.CACHE_DIR, config_mod.config_dir() / "playlists"))
+    if not isinstance(library, LiveLibrary):
+        library = LiveLibrary(library)               # one shared holder: a folder added or removed at run time reaches every part of the service at once
     media_server = MediaServer(library)
     rooms_seen = rooms_seen or (monitor.rooms_seen if monitor else (lambda: 0))
 
@@ -355,6 +374,213 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         except PlayError as e:
             return problem(e)
 
+    # ---- music folders, from the Music view (FR23) ------------------------------------------------------------------
+    def this_mac(request: Request) -> bool:
+        """True when the connection comes from this Mac itself: the TCP peer is loopback, or is the very address the connection came in
+        on (the Mac talking to itself through its own LAN address). That needs no address lookup and no cache, so nothing another device
+        can register in DNS or DHCP makes it count. A peer that isn't an IP address, or is missing, is another device. Judged from the
+        connection only, never from a header."""
+        def address(pair):
+            try:
+                ip = ipaddress.ip_address(pair[0]) if pair else None
+            except (ValueError, TypeError, IndexError):
+                return None
+            return ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
+        if no_local_clients:                                              # `--fake-rooms --no-local-clients`: to see what another device sees
+            return False
+        peer, local = address(request.scope.get("client")), address(request.scope.get("server"))
+        return peer is not None and (peer.is_loopback or (local is not None and peer == local))
+
+    def require_this_mac(request: Request) -> None:
+        if not this_mac(request):
+            raise playback.NotThisMac("Folders are changed on the Mac itself, not from another device")
+
+    folders_lock = threading.Lock()                                   # one read-modify-write of the config file at a time
+
+    def folder_view() -> list[dict]:
+        out = []
+        for r in library.music_roots:
+            try:
+                exists = r.is_dir()
+            except OSError:                                               # not allowed to look (a protected place, a parent without search permission)
+                exists = False
+            out.append({"path": str(r), "name": r.name or str(r), "exists": exists})
+        return out
+
+    def absolute_path(raw) -> Path:
+        if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
+            raise PlayError('send {"path": "<an absolute folder path>"}')
+        try:
+            raw.encode("utf-8")                                           # a lone surrogate can't be echoed back in an error
+        except UnicodeEncodeError:
+            raise PlayError("the folder path isn't valid text") from None
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            raise PlayError("the folder path must be absolute (or start with ~)")
+        try:
+            return p.resolve()
+        except (OSError, RuntimeError, ValueError) as e:
+            raise playback.FolderRefused(f"{raw}: can't be resolved ({e})") from e
+
+    def apply_config_change(**change) -> None:
+        """Rewrite music_folders in the config file, then re-read it and hand the library its new roots. Holds `folders_lock`."""
+        try:
+            config_mod.update_music_folders(cfg.path, **change)
+            library.swap_music_roots(config_mod.load(cfg.path).music_folders)
+        except config_mod.ConfigError as e:
+            raise playback.FolderConflict(str(e)) from e
+        except OSError as e:
+            raise playback.FolderConflict(f"{cfg.path}: {e.strerror or e}") from e
+
+    def current_roots() -> tuple[Path, ...]:
+        try:
+            return config_mod.load(cfg.path).music_folders
+        except config_mod.ConfigError as e:
+            raise playback.FolderConflict(str(e)) from e
+
+    def add_folder(raw) -> list[dict]:
+        real = absolute_path(raw)
+        try:
+            exists, is_dir = real.exists(), real.is_dir()
+        except OSError as e:                                              # e.g. a name over the filesystem's limit
+            raise playback.FolderRefused(f"{real}: {e.strerror or e}") from e
+        if not exists:
+            raise playback.FolderRefused(f"{real} doesn't exist")
+        if not is_dir:
+            raise playback.FolderRefused(f"{real} is not a folder")
+        try:
+            with os.scandir(real):
+                pass
+        except OSError as e:
+            raise playback.FolderRefused(f"{real} can't be read: {e.strerror or e}") from e
+        with folders_lock:
+            for r in current_roots():
+                if config_mod.same_folder(r, real):
+                    raise playback.FolderConflict(f"{real} is already a music folder")
+                if config_mod.nested_folders(real, r):
+                    raise playback.FolderConflict(f"{real} overlaps the music folder {r}")
+            apply_config_change(add=real)
+        return folder_view()
+
+    def remove_folder(raw) -> list[dict]:
+        target = absolute_path(raw)
+        with folders_lock:
+            if not any(config_mod.same_folder(r, target) for r in current_roots()):
+                raise playback.UnknownFolder(f"{target} is not a music folder")
+            apply_config_change(remove=target)
+        return folder_view()
+
+    HOME = Path.home().resolve()
+    VOLUMES = Path("/Volumes").resolve()
+    BROWSE_LIMIT = 500
+
+    def browse_folders(raw) -> dict:
+        if not raw:
+            return {"path": "", "parent": None, "entries": [{"name": "Home", "path": str(HOME), "readable": True},
+                                                            {"name": "Volumes", "path": "/Volumes", "readable": True}]}
+        real = absolute_path(raw)
+        if not (real.is_relative_to(HOME) or real.is_relative_to(VOLUMES)):
+            raise playback.NotThisMac(f"{real} is outside the home folder and /Volumes")
+        try:
+            is_dir = real.is_dir()
+        except OSError as e:
+            raise playback.FolderRefused(f"{real}: {e.strerror or e}") from e
+        if not is_dir:
+            raise playback.FolderRefused(f"{real} is not a folder")
+        entries = []
+        try:
+            with os.scandir(real) as it:
+                for e in sorted(it, key=lambda e: e.name.casefold()):
+                    if e.name.startswith("."):
+                        continue
+                    try:
+                        if not e.is_dir() or getattr(e.stat(), "st_flags", 0) & stat_mod.UF_HIDDEN:
+                            continue
+                    except OSError:
+                        continue
+                    try:
+                        with os.scandir(e.path):                     # listed, but marked when the service may not open it (macOS privacy)
+                            readable = True
+                    except OSError:
+                        readable = False
+                    entries.append({"name": e.name, "path": os.path.join(str(real), e.name), "readable": readable})
+                    if len(entries) >= BROWSE_LIMIT:
+                        break
+        except OSError as e:
+            raise playback.FolderRefused(f"{real} can't be read: {e.strerror or e}") from e
+        parent = real.parent if real != HOME and real != VOLUMES and (real.parent.is_relative_to(HOME) or real.parent.is_relative_to(VOLUMES)) else None
+        return {"path": str(real), "parent": str(parent) if parent else None, "entries": entries}
+
+    async def folders_route(request: Request):
+        # `is_dir()` on each root can hang on a disconnected share: not on the event loop, where it would stall every other request
+        return JSONResponse({"folders": await anyio.to_thread.run_sync(folder_view), "editable": this_mac(request), "config_path": str(cfg.path)})
+
+    async def folders_add_route(request: Request):
+        try:
+            require_this_mac(request)
+            body = await json_body(request)
+            return JSONResponse({"folders": await anyio.to_thread.run_sync(add_folder, body.get("path")), "editable": True})
+        except PlayError as e:
+            return problem(e)
+
+    async def folders_remove_route(request: Request):
+        try:
+            require_this_mac(request)
+            body = await json_body(request)
+            return JSONResponse({"folders": await anyio.to_thread.run_sync(remove_folder, body.get("path")), "editable": True})
+        except PlayError as e:
+            return problem(e)
+
+    async def folders_browse_route(request: Request):
+        try:
+            require_this_mac(request)
+            try:
+                with anyio.fail_after(BROWSE_TIMEOUT_S):            # a stalled network share must not hold the request
+                    return JSONResponse(await anyio.to_thread.run_sync(browse_folders, request.query_params.get("path", ""), abandon_on_cancel=True))
+            except TimeoutError:
+                return JSONResponse({"error": "That folder took too long to list (a disconnected network share?)"}, status_code=504)
+        except PlayError as e:
+            return problem(e)
+
+    async def seek_route(request: Request):
+        """POST /api/rooms/{uid}/seek {"position": seconds}: move the group's current track to that second (a paused room stays paused). The track's length is
+        read from the coordinator now, not from the cache, which can be a poll old (a track change would be checked against the
+        previous track). Refused (409, the speaker is not asked) for a track with no length and for a position outside the track."""
+        try:
+            body = await json_body(request)
+            position = body.get("position")
+            try:
+                valid = not isinstance(position, bool) and isinstance(position, (int, float)) and math.isfinite(position) and position >= 0
+            except OverflowError:                                # an integer too large for a float, e.g. 400 digits
+                valid = False
+            if not valid:
+                raise PlayError("position must be a number of seconds, 0 or more")
+            if monitor is None:
+                raise PlayError("no rooms are available")
+            uid = request.path_params["uid"]
+
+            def go():
+                try:
+                    dev = coordinator_now(uid)
+                except KeyError:
+                    raise playback.UnknownRoom(f"No such room: {uid}") from None
+                info = speaker_call("read the current track", dev.get_current_track_info)
+                m = re.fullmatch(r"(\d+):(\d\d):(\d\d)", str(info.get("duration") or ""))
+                length = int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3]) if m else 0
+                if length <= 0:                                  # "", "0:00:00" (radio, a live stream) or "NOT_IMPLEMENTED"
+                    raise playback.NotSeekable("This track has no length (nothing is playing, or it is a radio or live stream), so it can't be seeked")
+                whole = math.floor(position)
+                if whole >= length:
+                    raise playback.NotSeekable(f"That position is past the end of this {length} s track")
+                target = f"{whole // 3600}:{whole % 3600 // 60:02d}:{whole % 60:02d}"
+                speaker_call("seek", lambda: dev.seek(target))
+                monitor.refresh_group_of(uid)
+                return whole
+
+            return JSONResponse({"position": await anyio.to_thread.run_sync(go)})
+        except PlayError as e:
+            return problem(e)
+
     async def volume_route(request: Request):
         """POST /api/rooms/{uid}/volume {"level": 0-100}: the group's volume."""
         try:
@@ -380,6 +606,29 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
                 return now
 
             return JSONResponse({"volume": await anyio.to_thread.run_sync(go)})
+        except PlayError as e:
+            return problem(e)
+
+    async def fake_position_route(request: Request):
+        """POST /api/fake/rooms/{uid}/position {"position": seconds}: only with `--fake-rooms` (there is no fake system, and so
+        no route, in a real service). Puts a fake coordinator's playhead where a browser check needs it, inside the track."""
+        try:
+            body = await json_body(request)
+            position = body.get("position")
+            if isinstance(position, bool) or not isinstance(position, (int, float)) or not 0 <= position < 1e7:
+                raise PlayError("position must be a number of seconds, 0 or more")
+            uid = request.path_params["uid"]
+            try:
+                dev = fake_system.by_uid(uid).coordinator
+            except KeyError:
+                raise playback.UnknownRoom(f"No such room: {uid}") from None
+            with fake_system.lock:
+                fake_system.sync()                                # time already played counts before the playhead is moved
+                duration = dev.current_duration()
+                dev.position = int(min(position, duration - 1) if duration else position)
+            if monitor is not None:
+                await anyio.to_thread.run_sync(monitor.refresh_group_of, uid)
+            return JSONResponse({"position": dev.position})
         except PlayError as e:
             return problem(e)
 
@@ -801,7 +1050,9 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         state = monitor.state(request.path_params["uid"]) if monitor else None
         if state is None:
             return JSONResponse({"error": "no such room"}, status_code=404)
-        return JSONResponse(state)
+        # `updated` is when the speaker was read, `now` when this answer was made, both on this Mac's clock: a page can age the
+        # reading (the cache may hand out one that is a poll old) without trusting its own clock.
+        return JSONResponse({**state, "now": time.time()})
 
     # ---- live tab streams (FR15, FR16) ------------------------------------------------------------------------------
     def live_coordinator_uid(uid: str) -> str | None:
@@ -929,6 +1180,12 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         Route("/api/rooms/{uid}/ungroup", ungroup_route, methods=["POST"]),
         Route("/api/rooms/{uid}/transport", transport_route, methods=["POST"]),
         Route("/api/rooms/{uid}/volume", volume_route, methods=["POST"]),
+        Route("/api/rooms/{uid}/seek", seek_route, methods=["POST"]),
+        Route("/api/folders", folders_route, methods=["GET"]),
+        Route("/api/folders/add", folders_add_route, methods=["POST"]),
+        Route("/api/folders/remove", folders_remove_route, methods=["POST"]),
+        Route("/api/folders/browse", folders_browse_route, methods=["GET"]),
+        *([Route("/api/fake/rooms/{uid}/position", fake_position_route, methods=["POST"])] if fake_system is not None else []),
         Route("/media/{root_id}/{rel:path}", media_server.handle, methods=["GET", "HEAD"]),
         Mount("/", app=WebFiles(directory=str(WEB_DIR), html=True), name="web"),      # the UI (last: API routes win)
     ])
@@ -944,22 +1201,26 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
     return app
 
 
-def run(cfg: config_mod.Config, *, host: str = "0.0.0.0", port: int | None = None, fake_rooms: bool = False) -> int:
+def run(cfg: config_mod.Config, *, host: str = "0.0.0.0", port: int | None = None, fake_rooms: bool = False,
+        no_local_clients: bool = False) -> int:
     import uvicorn
 
     import soco
 
     port = port or cfg.port
     fetcher = None
+    fake_system = None
     if fake_rooms:
         from .fakes import FakeSystem, fake_fetcher
-        discover = FakeSystem().discover
+        fake_system = FakeSystem(realtime=True)               # the playhead follows the clock, so the UI has something to show
+        discover = fake_system.discover
         fetcher = fake_fetcher()                              # pages to send: shtl-experiment.com/hello-ep/ (2 tracks) and /about/ (none)
     else:
         def discover():
             return soco.discover(timeout=3, allow_network_scan=True) or set()
     monitor = RoomMonitor(discover, our_hosts=local_addresses, our_port=port)
     sleep = SleepAssertion(monitor, grace_minutes=cfg.pause_grace_minutes)
-    app = create_app(cfg, monitor=monitor, port=port, sleep=sleep, fetcher=fetcher)
-    uvicorn.run(app, host=host, port=port, log_level="info", http=live_mod.protocol_for(app.live))
+    app = create_app(cfg, monitor=monitor, port=port, sleep=sleep, fetcher=fetcher, fake_system=fake_system, no_local_clients=no_local_clients)
+    # proxy_headers=False: the peer address is the TCP peer, never an X-Forwarded-For header (FR23 trusts it to tell this Mac from another device)
+    uvicorn.run(app, host=host, port=port, log_level="info", http=live_mod.protocol_for(app.live), proxy_headers=False)
     return 0

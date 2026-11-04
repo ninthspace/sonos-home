@@ -1,0 +1,16 @@
+# Epic 01-10 Story 3, criterion 1 ([manual]): the raw TrackDuration the real Office reports, per source. 2026-11-03.
+# Run through tests/live.py muted_room on Office (both members muted, volume 64 and mute restored afterwards; the queue of 5 Foreshore
+# tracks and the stopped state were restored by its snapshot). Service: `sonos service run --port 8757` with a scratch config (the
+# installed service on 8737 untouched). Probe scripts were in the session scratchpad (probe.py, probe2.py, probe3.py).
+
+OBS native local file (16-bit 44.1 kHz WAV): raw TrackDuration='0:01:00' position='0:00:05' state=PLAYING service duration='0:01:00' uri=http://192.168.0.204:8757/media/0e72601802/native-44k16-60s.wav
+OBS converted local file (24-bit 96 kHz WAV, served as FLAC under its .wav URL): raw TrackDuration='0:00:00' position='0:00:00' state=STOPPED service duration='0:00:00' uri=http://192.168.0.204:8757/media/0e72601802/hires-96k24-40s.wav
+    (Office fetched the file twice, 200 OK each, and stayed STOPPED for the 60 s the probe waited: not a duration measurement, a failure to play.)
+OBS /remote/ proxied page track (Foreshore track 1): raw TrackDuration='0:04:54' position='0:00:04' state=PLAYING service duration='0:04:54'
+OBS the converted FLAC (the cache copy of the file above) served under a .flac URL name: raw TrackDuration='0:00:40' position='0:00:06' state=PLAYING uri=http://192.168.0.204:8757/media/0e72601802/converted-as-flac-40s.flac
+OBS stand-in live stream (x-rincon-mp3radio://, the form Player.play_stream uses; a local ffmpeg sine MP3 stream, not the service's /live/): raw TrackDuration='0:00:00' position='0:00:05' state=PLAYING title='stand-in'
+
+# After docs/quick/04 (converted files are served under a .flac URL), same Office, same muted_room procedure, service on 8757:
+OBS hi-res 24-bit 96 kHz WAV through the service (converted, .flac URL): raw TrackDuration='0:00:40' position='0:00:04' state=PLAYING service duration='0:00:40' uri=http://192.168.0.204:8757/media/0e72601802/hires-96k24-40s.wav.flac
+OBS later: position='0:00:14' duration='0:00:40'
+    (Office fetched .../hires-96k24-40s.wav.flac twice, 200 OK each; afterwards Office was STOPPED with its 5-track queue, volume 64, unmuted.)

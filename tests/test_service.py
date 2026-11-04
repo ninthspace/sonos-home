@@ -135,6 +135,62 @@ def test_hires_file_is_converted_on_first_fetch_and_served_as_16bit_flac(world, 
     assert client.get(url(world, "hires.wav")).content == r.content        # cached, same bytes
 
 
+def test_a_converted_files_url_ends_in_flac_and_serves_the_converted_flac(world, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "convcache")
+    flac_url = world.lib.media_path(BASE, world.music / "hires.wav", converted=True)
+    assert flac_url.endswith("/hires.wav.flac") and world.lib.media_path(BASE, world.music / "hires.wav").endswith("/hires.wav")
+    path = flac_url.split(BASE)[1]
+    r = client.get(path)
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/flac" and r.content[:4] == b"fLaC"
+    assert client.get(url(world, "hires.wav")).content == r.content                  # the old URL still gives the same converted bytes
+    assert client.get(url(world, "a.wav")).headers["content-type"] == "audio/wav"    # control: a plain WAV is still served as it is
+    assert len(list((tmp_path / "convcache").glob("*.flac"))) == 1                   # converted once
+
+
+def test_a_flac_suffixed_url_for_a_file_that_needs_no_conversion_or_does_not_exist_is_refused_and_converts_nothing(world, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "convcache")
+    make_tone(world.music / "master24.flac", rate=96000, bits=24)                    # a hi-res FLAC: converted, but already named .flac
+    for name in ("a.wav.flac", "c.mp3.flac", "nope.wav.flac", "master24.flac.flac", "link-to-outside/y.wav.flac"):
+        r = client.get(f"/media/{world.rid}/{name}")
+        assert r.status_code in (403, 404), (name, r.status_code)
+    for evil in ("..%2Fmusic2%2Fx.wav.flac", "%2E%2E/music2/x.wav.flac", "/etc/passwd.flac"):
+        r = client.get(f"/media/{world.rid}/{evil}")
+        assert r.status_code in (403, 404), (evil, r.status_code)
+    assert not (tmp_path / "convcache").exists() or not list((tmp_path / "convcache").glob("*"))      # nothing was converted
+    assert client.get(f"/media/{world.rid}/hires.wav.flac").status_code == 200                     # control: the real conversion URL works
+
+
+def test_a_flac_suffixed_url_cannot_reach_a_file_outside_the_root_through_a_symlink_named_like_its_source(world, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "convcache")
+    make_tone(tmp_path / "outside" / "big.wav", rate=96000, bits=24)               # hi-res, outside the music root
+    (world.music / "evil.wav").symlink_to(tmp_path / "outside" / "big.wav")
+    for u in (f"/media/{world.rid}/evil.wav.flac", f"/media/{world.rid}/evil.wav"):
+        assert client.get(u).status_code in (403, 404), u
+    assert not (tmp_path / "convcache").exists() or not list((tmp_path / "convcache").glob("*"))      # nothing outside was converted
+    assert client.get(f"/media/{world.rid}/hires.wav.flac").status_code == 200       # control: a real conversion inside the root works
+
+
+def test_a_hi_res_flac_keeps_its_name_in_its_url_and_is_served_converted(world, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "convcache")
+    make_tone(world.music / "master24.flac", rate=96000, bits=24)
+    u = world.lib.media_path(BASE, world.music / "master24.flac", converted=True)
+    assert u.endswith("/master24.flac") and not u.endswith(".flac.flac")
+    r = client.get(u.split(BASE)[1])
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/flac"
+    served = tmp_path / "served.flac"
+    served.write_bytes(r.content)
+    info = media.probe(served)
+    assert (info.codec, info.sample_rate, info.bits) == ("flac", 48000, 16)          # it was converted, not served as the 24-bit master
+
+
+def test_a_real_file_named_like_a_conversion_url_is_served_as_itself(world, client, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "convcache")
+    make_tone(world.music / "hires.wav.flac")                                       # a real 16-bit FLAC beside hires.wav
+    r = client.get(f"/media/{world.rid}/hires.wav.flac")
+    assert r.status_code == 200 and r.content == (world.music / "hires.wav.flac").read_bytes()
+    assert not (tmp_path / "convcache").exists() or not list((tmp_path / "convcache").glob("*"))      # it was not the converted one
+
+
 def test_a_url_built_before_a_restart_serves_the_same_bytes_after_it(world, tmp_path):
     u = world.lib.media_path("http://10.0.0.5:8737", world.music / "a.wav")
     path = u.split("http://10.0.0.5:8737")[1]

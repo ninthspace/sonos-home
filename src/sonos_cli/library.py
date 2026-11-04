@@ -8,6 +8,7 @@ playlists directory). Names are compared after Unicode NFC normalisation.
 from __future__ import annotations
 
 import hashlib
+import threading
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,14 +77,17 @@ class Library:
     def root_by_id(self, rid: str) -> Path | None:
         return next((r for r in self.music_roots if root_id(r) == rid), None)
 
-    def media_path(self, base_url: str, path: str | Path) -> str:
-        """`<base>/media/<root-id>/<percent-encoded relative path>` for a file under a music root."""
+    def media_path(self, base_url: str, path: str | Path, converted: bool = False) -> str:
+        """`<base>/media/<root-id>/<percent-encoded relative path>` for a file under a music root. A file that is converted to FLAC
+        before it is served (`converted`) gets `.flac` added to that path (`hires.wav` becomes `hires.wav.flac`; a hi-res `.flac` keeps
+        its name): an S1 decides from the extension of the URL, and refuses FLAC served under a `.wav` name."""
         real = self.guard(path)
         root = self.music_root_of(real)
         if root is None:
             raise PathNotAllowed(f"{real} is not under a music folder")
         rel = nfc(str(real))[len(nfc(str(root))):].lstrip("/")
-        return f"{base_url.rstrip('/')}/media/{root_id(root)}/{quote(rel)}"
+        suffix = ".flac" if converted and not rel.lower().endswith(".flac") else ""         # a hi-res .flac is converted but already named so
+        return f"{base_url.rstrip('/')}/media/{root_id(root)}/{quote(rel)}{suffix}"
 
     def resolve_media(self, rid: str, rel: str) -> Path:
         """The guarded real path for `/media/<rid>/<rel>`. Raises KeyError for an unknown root id."""
@@ -93,3 +97,20 @@ class Library:
         if has_traversal(rel):
             raise PathNotAllowed("path traversal")
         return self.guard(root / rel) if not rel.startswith("/") else self.guard(rel)
+
+
+class LiveLibrary:
+    """The one library every part of the service shares (browse, media serving, the player, playlists), whose music roots can be
+    replaced while it runs (FR23: a folder added or removed from the Music view). Each call reads the current `Library` once, so a
+    request sees either the old roots or the new ones, never a mix. The cache and playlists folders stay as they were."""
+
+    def __init__(self, library: Library):
+        self._lib = library
+        self._lock = threading.Lock()
+
+    def swap_music_roots(self, music_roots) -> None:
+        with self._lock:
+            self._lib = Library.create(music_roots, self._lib.extra_roots)
+
+    def __getattr__(self, name: str):                      # only reached for what this class doesn't define: the Library's own API
+        return getattr(self._lib, name)

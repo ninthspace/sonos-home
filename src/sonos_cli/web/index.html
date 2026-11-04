@@ -28,7 +28,7 @@
         <button id="clear-queue" type="button" class="quiet" hidden>Clear</button>
       </div>
       <ol id="queue-list"></ol>
-      <p id="queue-note" class="note"></p>
+      <p id="queue-note" class="note" role="status"></p>
     </section>
   </nav>
 
@@ -106,11 +106,23 @@
       </div>
     </div>
 
+    <section id="folders" class="folders" aria-labelledby="folders-title" hidden>
+      <div class="folders-head">
+        <h2 id="folders-title">Music folders</h2>
+        <button id="add-folder" type="button" class="quiet" hidden>Add folder</button>
+      </div>
+      <ul id="folder-list" class="folder-list"></ul>
+      <p id="folder-note" class="note" role="status" tabindex="-1"></p>
+    </section>
+
     <section id="empty" class="empty" hidden>
       <h2>No music folders yet</h2>
       <p id="empty-message"></p>
-      <p>Add one to <code id="config-path"></code>, then restart the service:</p>
-      <pre id="config-example">music_folders = ["~/Dropbox/Music"]</pre>
+      <button id="empty-add" type="button" hidden>Add folder</button>
+      <div id="empty-by-hand">
+        <p>Add one to <code id="config-path"></code>, then restart the service:</p>
+        <pre id="config-example">music_folders = ["~/Dropbox/Music"]</pre>
+      </div>
     </section>
 
     <ul id="listing" class="listing"></ul>
@@ -135,11 +147,42 @@
   </form>
 </dialog>
 
+<dialog id="folder-picker" aria-labelledby="fp-title">
+  <form method="dialog" class="picker-body">
+    <h2 id="fp-title">Add a music folder</h2>
+    <p id="fp-where" class="note" tabindex="-1"></p>
+    <ul id="fp-list"></ul>
+    <div class="inline">
+      <button id="fp-up" type="button" class="quiet">Up</button>
+      <button id="fp-use" type="button">Add this folder</button>
+    </div>
+    <div class="inline">
+      <label class="sr" for="fp-path">Folder path</label>
+      <input id="fp-path" type="text" placeholder="Or paste a path, like ~/Dropbox/Music" autocomplete="off">
+      <button id="fp-add-path" type="button">Add</button>
+    </div>
+    <p id="fp-note" class="note" role="status"></p>
+    <button type="submit" value="cancel" class="quiet">Close</button>
+  </form>
+</dialog>
+
+<dialog id="folder-remove" aria-labelledby="fr-title">
+  <form method="dialog" class="picker-body">
+    <h2 id="fr-title">Stop using this folder?</h2>
+    <p id="fr-what" class="note"></p>
+    <p>Tracks from it that are queued, or in a playlist, will stop playing. Nothing is deleted from the disk.</p>
+    <p id="fr-note" class="note" role="status"></p>
+    <button id="fr-confirm" type="button">Remove folder</button>
+    <button type="submit" value="cancel" class="quiet" autofocus>Keep it</button>
+  </form>
+</dialog>
+
 <p id="announce" class="sr" aria-live="polite"></p>
 <footer class="player" aria-label="Now playing">
   <div class="track">
     <p id="np-title" class="title">Nothing playing</p>
     <p id="np-meta" class="meta">Pick a room and a file.</p>
+    <p id="seek-note" class="meta seek-note" role="status"></p>
   </div>
   <div class="transport">
     <button id="prev" type="button" aria-label="Previous track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2.5v14H6zM20 5v14L9.5 12z"/></svg></button>
@@ -147,7 +190,7 @@
     <button id="next" type="button" aria-label="Next track"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5H18v14h-2.5zM4 5l10.5 7L4 19z"/></svg></button>
   </div>
   <div class="deck">
-    <div id="progress" class="progress" role="progressbar" aria-label="Position in the track" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-fill"></div></div>
+    <div id="progress" class="progress" role="slider" tabindex="0" aria-label="Position in the track" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" aria-valuetext="" aria-disabled="true"><div id="progress-fill"></div><div id="progress-thumb"></div></div>
     <label class="fader">
       <input id="volume" type="range" min="0" max="100" value="0">
       <output id="volume-out">–</output>
