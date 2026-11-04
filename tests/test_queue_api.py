@@ -55,7 +55,7 @@ def test_jump_plays_that_item_and_clear_empties_the_queue(tmp_path):
     assert client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["current"] == 2
     assert post_json(client, f"/api/rooms/{system.lounge.uid}/queue/clear", {}).status_code == 200
     body = client.get(f"/api/rooms/{system.lounge.uid}/queue").json()
-    assert body == {"items": [], "current": None} and system.lounge.queue_size == 0
+    assert body["items"] == [] and body["current"] is None and system.lounge.queue_size == 0
 
 
 def test_a_member_acts_on_the_coordinators_queue(tmp_path):
@@ -295,3 +295,113 @@ def test_a_name_the_cap_cut_never_gives_a_fragment_as_the_artist():
         else:
             assert t_unread + (f" by {a_unread}" if a_unread else "") == full          # shown as the page named it
             assert a_read in ("", " ".join(artist.split())), (full, a_read)         # the page's whole artist or none
+
+
+# ---- the queue is read only when it changes (docs/quick/10) ----------------------------------------------------------------
+
+def count_browses(dev):
+    """Wrap the device's get_queue to record each Browse's (start, max_items)."""
+    seen, real = [], dev.get_queue
+
+    def get_queue(start=0, max_items=100, full_album_art_uri=False):
+        seen.append((start, max_items))
+        return real(start, max_items)
+    dev.get_queue = get_queue
+    return seen
+
+
+@pytest.mark.parametrize("n", [3, 230])
+def test_an_unchanged_queue_is_not_read_again_and_answers_unchanged(tmp_path, n):
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, n)
+    lounge = system.lounge
+    lounge.play_from_queue(0)
+    monitor.refresh_group_of(lounge.uid)
+    url = f"/api/rooms/{lounge.uid}/queue"
+    seen = count_browses(lounge)
+    first = client.get(url).json()
+    assert len(first["items"]) == n and first["current"] == 0 and isinstance(first["update_id"], int)
+    assert len(seen) == (n + 99) // 100                                    # a first reading reads it all
+    uid = first["update_id"]
+
+    seen.clear()
+    assert client.get(f"{url}?since={uid}").json() == {"unchanged": True, "current": 0, "update_id": uid}
+    assert seen == [(0, 1)]                                                 # one item, to learn the UpdateID: not the queue
+
+    lounge.next()                                                           # a track plays on: the queue's contents are the same
+    monitor.refresh_group_of(lounge.uid)
+    seen.clear()
+    assert client.get(f"{url}?since={uid}").json() == {"unchanged": True, "current": 1, "update_id": uid}
+    assert seen == [(0, 1)]
+    # without since, the items come from the kept reading, also without reading the queue again
+    seen.clear()
+    full = client.get(url).json()
+    assert len(full["items"]) == n and full["current"] == 1 and seen == [(0, 1)]
+
+    from pathlib import Path
+    from sonos_cli.media import AudioInfo, Track
+    info = AudioInfo("flac", 44100, 2, 16, 10.0, None, None, None)
+    lounge.add_to_queue(player.queue_item(Track(Path("/m/added.flac"), info), "http://127.0.0.1:8737/media/abc/added.flac", n))
+    added = client.get(f"{url}?since={uid}").json()
+    assert "unchanged" not in added and len(added["items"]) == n + 1 and added["items"][-1]["title"] == "added"
+    assert added["update_id"] != uid
+
+    assert post_json(client, f"{url}/clear", {}).status_code == 200
+    cleared = client.get(f"{url}?since={added['update_id']}").json()
+    assert cleared["items"] == [] and cleared["update_id"] != added["update_id"]
+
+
+def test_a_queue_replaced_by_playing_a_folder_is_read_again(tmp_path):
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, 3)
+    url = f"/api/rooms/{system.lounge.uid}/queue"
+    uid = client.get(url).json()["update_id"]
+    fill(system, music, client, n=3)                                        # Play on a folder replaces it: as many items, other ones
+    body = client.get(f"{url}?since={uid}").json()
+    assert "unchanged" not in body, "a replaced queue of the same length was answered as unchanged"
+    assert [i["title"] for i in body["items"]] == ["t0", "t1", "t2"] and body["update_id"] != uid
+
+
+@pytest.mark.parametrize("no_id", [None, 0])
+def test_a_speaker_without_an_update_id_is_read_in_full_every_time(tmp_path, monkeypatch, no_id):
+    from sonos_cli import fakes
+    monkeypatch.setattr(fakes.FakeSoCo, "queue_update_id", property(lambda self: no_id))
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, 230)
+    url = f"/api/rooms/{system.lounge.uid}/queue"
+    seen = count_browses(system.lounge)
+    first = client.get(url).json()
+    assert first["update_id"] is None and len(first["items"]) == 230
+    for since in ("None", "0", ""):
+        seen.clear()
+        body = client.get(f"{url}?since={since}").json()
+        assert "unchanged" not in body and len(body["items"]) == 230 and len(seen) == 3
+
+
+@pytest.mark.parametrize("since", ["abc", "1.5", "", "-1", "１２", "9" * 5000])
+def test_a_since_that_is_not_a_whole_number_is_ignored(tmp_path, since):
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, 3)
+    r = client.get(f"/api/rooms/{system.lounge.uid}/queue", params={"since": since})
+    assert r.status_code == 200 and len(r.json()["items"]) == 3 and "unchanged" not in r.json()
+
+
+def test_a_queue_at_and_past_the_play_cap_is_kept_too(tmp_path):
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, 650)                                                 # Play on a big folder leaves 500; a queue from elsewhere can be longer
+    url = f"/api/rooms/{system.lounge.uid}/queue"
+    seen = count_browses(system.lounge)
+    first = client.get(url).json()
+    assert len(first["items"]) == 500 and len(seen) == 5
+    seen.clear()
+    body = client.get(f"{url}?since={first['update_id']}").json()
+    assert seen == [(0, 1)], "a queue at the play cap was read in full again"
+    assert body.get("unchanged") is True
+
+
+def test_a_since_equal_to_a_fresh_readings_update_id_still_gets_the_items(tmp_path):
+    # a since kept from another coordinator, or from before the service or the speaker restarted, can equal a new UpdateID
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    tiny_items(system, 3)
+    body = client.get(f"/api/rooms/{system.lounge.uid}/queue?since={system.lounge.queue_update_id}").json()
+    assert "unchanged" not in body and len(body["items"]) == 3

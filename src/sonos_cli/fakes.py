@@ -206,8 +206,13 @@ class FakeSoCo:
         """As SoCo: one Browse of at most `max_items` (default 100) from `start`; `total_matches` says how many exist."""
         q = FakeQueue(self.queue[start:start + max_items])
         q.total_matches = len(self.queue)
-        q.update_id = len(self.calls)
+        q.update_id = self.queue_update_id
         return q
+
+    @property
+    def queue_update_id(self) -> int:
+        """As a speaker's Browse `UpdateID`: changes when the queue's contents change (a track plays: no change)."""
+        return 1 + (hash(tuple(_item_uri(i) for i in self.queue)) & 0x7FFFFFFF)
 
     def clear_queue(self) -> None:
         self._master()

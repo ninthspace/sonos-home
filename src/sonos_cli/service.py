@@ -808,8 +808,13 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         except PlayError as e:
             return problem(e)
 
-    def queue_snapshot(uid: str) -> dict:
-        """The coordinator's queue, as the UI shows it. Items on another host's service are labelled with that host."""
+    # The last full reading of each coordinator's queue, kept with the Browse `UpdateID` its first page carried, which the speaker
+    # changes when the queue's contents change (docs/quick/10): a reading whose UpdateID and total still match is not read again.
+    queue_readings: dict[str, tuple[int, int, list[dict]]] = {}
+
+    def queue_snapshot(uid: str, since: int | None = None) -> dict:
+        """The coordinator's queue, as the UI shows it. Items on another host's service are labelled with that host.
+        With `since` equal to the queue's `update_id`, the items are left out (`unchanged`); `current` is always fresh."""
         try:
             dev = coordinator_now(uid)
         except KeyError:
@@ -818,41 +823,69 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         if state.get("reachable") is False:
             raise playback.SpeakerError("The speaker isn't answering, so its queue can't be read right now")
 
+        def page_id(page) -> int | None:
+            uid_ = getattr(page, "update_id", None)
+            return int(uid_) if isinstance(uid_, int) and not isinstance(uid_, bool) and uid_ > 0 else None
+
         def read_all():
             # One Browse returns at most 100 items (SoCo's default), so page until everything (up to the play cap) is read.
-            got, start = [], 0
+            got, start, first_id, first_total = [], 0, None, None
             while len(got) < playback.MAX_TRACKS:
                 page = dev.get_queue(start, min(100, playback.MAX_TRACKS - len(got)))
+                if start == 0:
+                    first_id, first_total = page_id(page), getattr(page, "total_matches", None)
                 got.extend(page)
                 start += len(page)
                 if not len(page) or start >= getattr(page, "total_matches", len(got)):
                     break
-            return got
+            return got, first_id, first_total
 
-        items = speaker_call("read the queue", read_all)
-        hosts = local_addresses()
-        out = []
-        for i, item in enumerate(items):
-            res = (getattr(item, "resources", None) or [None])[0]
-            uri = getattr(res, "uri", "") if res is not None else ""
-            source = classify_source(uri, hosts, serve_port)
-            title, artist = remote_mod.track_label(uri, getattr(item, "title", "") or uri, getattr(item, "creator", "") or "")
-            out.append({"index": i, "uri": uri, "title": title, "artist": artist,
-                        "host": source[len("other-host:"):] if source.startswith("other-host:") else None})
+        def read():
+            kept = queue_readings.get(dev.uid)
+            if kept is not None:
+                probe = dev.get_queue(0, 1)                     # one item: is the kept reading still the queue?
+                if page_id(probe) is not None and (page_id(probe), getattr(probe, "total_matches", None)) == kept[:2]:
+                    return kept, True
+            items, update_id, total = read_all()
+            # kept with the speaker's own total (a queue at or past the play cap included), as the probe reports it
+            reading = (update_id, total, label_items(items))
+            if update_id is not None and isinstance(total, int):
+                queue_readings[dev.uid] = reading
+            else:
+                queue_readings.pop(dev.uid, None)               # no UpdateID or total: read in full each time
+            return reading, False
+
+        def label_items(items) -> list[dict]:
+            hosts = local_addresses()
+            out = []
+            for i, item in enumerate(items):
+                res = (getattr(item, "resources", None) or [None])[0]
+                uri = getattr(res, "uri", "") if res is not None else ""
+                source = classify_source(uri, hosts, serve_port)
+                title, artist = remote_mod.track_label(uri, getattr(item, "title", "") or uri, getattr(item, "creator", "") or "")
+                out.append({"index": i, "uri": uri, "title": title, "artist": artist,
+                            "host": source[len("other-host:"):] if source.startswith("other-host:") else None})
+            return out
+
+        (update_id, _, out), reused = speaker_call("read the queue", read)
         track = state.get("track") or {}
         current = track.get("index")
         # Only claim a current item when the room really is playing that queue item (a radio or Spotify source reports track 1 too).
         if not (isinstance(current, int) and 0 <= current < len(out) and _same_uri(out[current]["uri"], track.get("uri", ""))):
             current = None
-        for o in out:
-            del o["uri"]
-        return {"items": out, "current": current}
+        # unchanged only from a reading the probe confirmed: a since from another coordinator, or from before a speaker restarted,
+        # that happens to equal a fresh reading's UpdateID still gets the items
+        if reused and since == update_id:
+            return {"unchanged": True, "current": current, "update_id": update_id}
+        return {"items": [{k: v for k, v in o.items() if k != "uri"} for o in out], "current": current, "update_id": update_id}
 
     async def queue_route(request: Request):
         try:
             if monitor is None:
                 raise PlayError("no rooms are available")
-            return JSONResponse(await anyio.to_thread.run_sync(queue_snapshot, request.path_params["uid"]))
+            since = request.query_params.get("since", "")
+            since = int(since) if since.isascii() and since.isdigit() and len(since) <= 18 else None   # anything but a whole number is ignored
+            return JSONResponse(await anyio.to_thread.run_sync(queue_snapshot, request.path_params["uid"], since))
         except PlayError as e:
             return problem(e)
 

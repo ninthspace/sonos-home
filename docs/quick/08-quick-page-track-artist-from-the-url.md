@@ -1,7 +1,7 @@
 # A page track keeps its artist when its file has no artist tag
 
 **Date**: 2026-11-04  
-**Status**: In Progress  
+**Status**: Complete  
 **Source**: the user's screenshot of Office's queue after sending https://shtl-experiment.com/z0ne-1-3/ (2026-11-04): "Z0NE2", "Z0NE1", "Z0NE3 by Z0NE", with no artist on the first two. Found: the release's MP3s carry `TPE2` (album artist "Z0NE") and no `TPE1`; Sonos uses only the track artist, so a track whose tags it has read comes back with a title and album and an empty `dc:creator`, while a track not read yet still carries the name the service gave its proxy URL ("Z0NE3 by Z0NE.mp3", docs/quick/02). The track order is the page's (track 1 is called "Z0NE2"). Spec FR13 (the proxy URL's name carries the artist), FR19 (the queue panel's labels), FR9 (now playing).  
 **Effort**: medium  
 **Audit**: fix needed, then fixed (2026-11-04), 2 rounds: round 1 (2 Warnings: a name cut by the 240-character cap could pass the start of an artist ("… by ア") off as the whole artist; the red records lacked file:line and two lacked a failure message; Suggestions taken: the screen-reader announcement includes the artist, two stale comments; not taken: a page with no artist whose title holds one " by " is split into title and artist while unread, which reads the same on screen) and round 2 (1 Warning: the round-1 limit, 228 encoded characters, let a cut name of 226–228 through, so "Bjork" could still pass for "Bjork 🎵🎵"; fixed after the last round, not re-audited: the limit is 225, with the reason in the code, a case that cuts to 227, and a randomised test of 4000 titles and artists, its red recorded under criterion 1)
@@ -19,7 +19,7 @@
 - In the web page on the fake rooms, the queue rows and the now-playing line for such a queue show "Z0NE2 by Z0NE" (and the others likewise). `[browser]`
   - Evidence: browser-observed in Chrome at http://localhost:8761/ (a scratch script starting the fake rooms from .venv with Office's queue holding the Z0NE case: two items with tag titles and no creator, one titled by its file name). Queue rows read "Z0NE2 by Z0NE", "Z0NE1 by Z0NE", "Z0NE3 by Z0NE"; now playing read "Z0NE2 by Z0NE" ("this Mac, playing, 0:47 / 22:37"), and after a jump to the third, unread track, "Z0NE3 by Z0NE". The page had never shown an artist in now playing; it now adds " by Artist" as the queue rows do (`app.js` `renderPlayer`, `queueItem`) — red: n/a — browser-observed
 - On the real speakers, Office's queue for https://shtl-experiment.com/z0ne-1-3/ shows the artist on every row, and now playing shows it too. `[user]`
-  - Waiting on user: on the reinstalled service, send https://shtl-experiment.com/z0ne-1-3/ to Office and look at the queue and now playing.
+  - Evidence (user, 2026-11-04): after reinstalling the service from e0745a9 on both Macs, the user reported "that works now" — red: n/a — user
 
 ### Label page tracks from the URL
 **Task**: 8.1  

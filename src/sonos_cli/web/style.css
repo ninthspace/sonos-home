@@ -50,8 +50,15 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .layout { display: grid; grid-template-columns: minmax(0, 40rem) minmax(0, 1fr); gap: 1.5rem 2rem; max-width: 84rem; margin: 0 auto; padding: .5rem 2rem 1.5rem; align-items: start; }
 
 /* ---- rooms: channel strips ---- */
-#room-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); gap: .85rem; }
-#room-list li.none { grid-column: 1 / -1; color: var(--mute); padding: .65rem .25rem; }
+/* one row that scrolls sideways when the rooms don't fit; the padding (taken back by the margin) keeps the rings unclipped,
+   and an edge fades when there are rooms past it (app.js sets .more-left / .more-right) */
+#room-list { list-style: none; margin: -.7rem; padding: .7rem; display: flex; gap: .85rem; overflow-x: auto; overscroll-behavior-x: contain;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l, 0px), #000 calc(100% - var(--fade-r, 0px)), transparent 100%);
+          mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-l, 0px), #000 calc(100% - var(--fade-r, 0px)), transparent 100%); }
+#room-list.more-left { --fade-l: 2.5rem; }
+#room-list.more-right { --fade-r: 2.5rem; }
+#room-list li { flex: 1 0 9rem; }
+#room-list li.none { flex-basis: 100%; color: var(--mute); padding: .65rem .25rem; }
 #room-list li.room { position: relative; display: flex; flex-direction: column; align-items: stretch; height: 22rem; overflow: hidden;
   border-radius: 12px; background: var(--panel); color: var(--ink); }
 #room-list li.room:hover { background: #1a2760; }
@@ -96,7 +103,8 @@ li.room .vol { display: block; padding: 0 0 .85rem; text-align: center; font: 70
 .queue li { border-top: 1px solid var(--line); }
 .queue li button { display: flex; width: 100%; min-width: 0; overflow-wrap: anywhere; gap: .7rem; align-items: baseline; border-radius: 0; padding: .6rem .5rem; text-align: left;
   background: transparent; color: var(--ink); box-shadow: none; font: 400 1.05rem/1.3 var(--body); letter-spacing: 0; }
-.queue li button:hover { background: var(--panel); transform: none; }
+.queue li.played button { opacity: .5; }               /* played: still there, and a click plays it again */
+.queue li button:hover { background: var(--panel); transform: none; opacity: 1; }
 .queue li button:active { transform: none; }
 .queue li button[aria-busy="true"] { background: var(--key); outline: 2px dashed var(--signal); outline-offset: -2px; cursor: progress; }
 .queue li button[aria-busy="true"] .pos { color: var(--signal); }
@@ -254,11 +262,23 @@ dialog::backdrop { background: rgba(4, 8, 24, .7); }
 .fader input::-moz-range-thumb { width: 1.5rem; height: 1.9rem; background: #eef1ff; border: 0; border-radius: 5px; box-shadow: 0 3px 0 #8c97d0; }
 
 @media (max-width: 1280px) {
-  .layout { grid-template-columns: minmax(0, 18.5rem) minmax(0, 1fr); gap: 1rem 1.25rem; padding: .5rem 1.25rem 1.5rem; }
-  #room-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
-  #room-list li.room { height: 15rem; }
-  .strip .rname { font-size: 1.5rem; }
+  .layout { grid-template-columns: minmax(0, 19.5rem) minmax(0, 1fr); gap: 1rem 1.25rem; padding: .5rem 1.25rem 1.5rem; }
   .top { padding: 1rem 1.25rem .75rem; }
+  /* narrow strips, four across the column (and a 375 px phone); more rooms scroll sideways */
+  #room-list { gap: .45rem; }
+  #room-list li { flex: 1 0 4.4rem; }
+  #room-list li.room { height: 15rem; }
+  #room-list li.room:has(.strip:focus-visible) { outline-offset: 3px; }   /* the focus ring stays inside the narrower gaps */
+  .strip-fader { touch-action: pan-x; }             /* the fader fills much of a narrow strip: a sideways swipe on it scrolls the row, an up/down drag moves it */
+  .strip { padding: 0 .3rem; }
+  .strip .cap { margin: 0 -.3rem .6rem; }
+  .strip .rname { font-size: 1rem; overflow-wrap: anywhere; }
+  .strip .rname .plus { font-size: .8rem; margin-left: .15rem; }
+  .strip .state { font-size: .72rem; gap: .25rem; margin-top: .35rem; }
+  .led { width: .5rem; height: .5rem; }
+  .meter { display: none; }                         /* display-only; the fader and its number show the level */
+  .chan { margin: .6rem 0 .4rem; }
+  li.room .vol { font-size: 1.25rem; padding-bottom: .6rem; }
 }
 @media (max-width: 760px) {
   :root { --player: 12.5rem; }
@@ -266,11 +286,7 @@ dialog::backdrop { background: rgba(4, 8, 24, .7); }
   .top h1 { font-size: 2rem; }
   .views button { padding: .5rem .9rem; font-size: 1.15rem; }
   .layout { grid-template-columns: minmax(0, 1fr); padding: .5rem 1rem 1rem; gap: 1rem; }
-  #room-list { display: flex; gap: .65rem; overflow-x: auto; padding: .5rem .5rem .9rem; }
-  #room-list li { flex: none; width: 8.6rem; }
-  #room-list li.room { height: 17rem; }
-  .strip .rname { font-size: 1.6rem; }
-  .chan { margin: .6rem 0 .4rem; }
+  #room-list li.room { height: 17rem; }                    /* a longer fader for a thumb */
   .player { grid-template-columns: minmax(0, 1fr) auto; padding: .7rem 1rem; gap: .6rem 1rem; }
   .player .title { font-size: 1.6rem; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.05; }
   .transport { gap: .5rem; }

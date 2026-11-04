@@ -224,9 +224,35 @@ function renderRooms() {
     }
     for (const [uid, el] of roomEls) if (!seen.has(uid)) { el.li.remove(); roomEls.delete(uid); delete faders[uid]; }
   }
-  updatePlayLabel();                                       // the Play buttons in the playlist editor and Web page view name the room
+  revealSelectedRoom();
+  roomEdges();
+  updatePlayLabel();                                      // the Play buttons in the playlist editor and Web page view name the room
   if (state.view === "rooms") renderRoomsPanel(false);
 }
+
+// The room row scrolls sideways when the rooms don't fit: an edge fades while there are rooms past it.
+function roomEdges() {
+  const ul = $("room-list");
+  const max = ul.scrollWidth - ul.clientWidth;
+  ul.classList.toggle("more-left", ul.scrollLeft > 2);
+  ul.classList.toggle("more-right", ul.scrollLeft < max - 2);
+}
+// The selected room is scrolled into the row's view, clear of the faded edges, when it is chosen or first shown (the row only, never the page).
+let revealedRoom = null;
+function revealSelectedRoom() {
+  const el = roomEls.get(state.roomUid);
+  const key = `${state.roomUid}|${roomEls.size}`;           // again when rooms come or go, which moves the strips
+  if (!el || revealedRoom === key) return;
+  revealedRoom = key;
+  const ul = $("room-list");
+  const edge = 2.5 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16);   // clear of the faded edge (--fade-l / --fade-r)
+  const box = ul.getBoundingClientRect(), r = el.li.getBoundingClientRect();
+  const left = r.left - box.left + ul.scrollLeft - edge, right = r.right - box.left + ul.scrollLeft + edge;   // in the row's scroll coordinates
+  if (left < ul.scrollLeft) ul.scrollLeft = Math.max(0, left);
+  else if (right > ul.scrollLeft + ul.clientWidth) ul.scrollLeft = right - ul.clientWidth;
+}
+$("room-list").addEventListener("scroll", roomEdges, { passive: true });
+window.addEventListener("resize", roomEdges);
 
 // ---- now playing --------------------------------------------------------------------------------------
 
@@ -501,15 +527,21 @@ let queueSeq = 0;
 async function pollQueue() {
   if (!state.roomUid) return;
   const asked = state.roomUid, mine = ++queueSeq;
+  const had = state.queue;
+  const since = had && had.update_id != null ? `?since=${had.update_id}` : "";      // the service leaves the items out when they haven't changed
   let q = null;
-  try { q = await api(`/api/rooms/${encodeURIComponent(asked)}/queue`, undefined, { slow: true }); }
+  try { q = await api(`/api/rooms/${encodeURIComponent(asked)}/queue${since}`, undefined, { slow: true }); }
   catch (e) {
     if (mine === queueSeq && asked === state.roomUid) $("queue-note").textContent = e.status !== undefined ? e.message : "Couldn't read the queue just now.";
     return;                                                // keep what is on screen (and the user's focus and scroll) as it was
   }
   if (mine !== queueSeq || asked !== state.roomUid) return;
-  state.queue = q;
-  renderQueue();
+  if (q.unchanged) {
+    if (state.queue !== had || !had) return;               // a newer reading arrived meanwhile
+    if (had.current === q.current) { queueNote(had); return; }      // nothing to redraw; an earlier failed reading's note goes
+    state.queue = { ...had, current: q.current };
+  } else state.queue = q;
+  renderQueue();                                           // only when the items or the current track changed
 }
 
 // ---- jumping to a queue item ----------------------------------------------------------------------------
@@ -553,18 +585,23 @@ async function jumpTo(index) {
   pollState(); pollQueue();
 }
 
+function queueNote(q) {
+  $("queue-note").textContent = state.jumpNote || (q.items.length ? "" : "The queue is empty. Play something to fill it.");
+  $("queue-note").classList.toggle("error", !!state.jumpNote);
+}
+
 function renderQueue() {
   const ol = $("queue-list");
   const had = ol.contains(document.activeElement) ? [...ol.querySelectorAll("button")].indexOf(document.activeElement) : -1;
   ol.replaceChildren();
   const q = state.queue;
   if (!q) { $("clear-queue").hidden = true; return; }
-  $("queue-note").textContent = state.jumpNote || (q.items.length ? "" : "The queue is empty. Play something to fill it.");
-  $("queue-note").classList.toggle("error", !!state.jumpNote);
+  queueNote(q);
   $("clear-queue").hidden = !q.items.length;
   for (const it of q.items) {
     const li = document.createElement("li");
     li.dataset.current = String(it.index === q.current);
+    if (q.current != null && it.index < q.current) li.classList.add("played");      // played: dimmed, above the current one and out of view
     const b = document.createElement("button");
     b.type = "button";
     b.setAttribute("aria-current", String(it.index === q.current));
@@ -588,9 +625,8 @@ function renderQueue() {
   const buttons = ol.querySelectorAll("button");
   if (had >= 0 && buttons[had]) buttons[had].focus({ preventScroll: true });            // a re-render must not drop keyboard focus
   const cur = ol.querySelector('li[data-current="true"]');
-  if (cur && q.current !== lastQueueCurrent) {              // scroll the list only, never the page
-    const top = cur.offsetTop - ol.offsetTop;
-    if (top < ol.scrollTop || top + cur.offsetHeight > ol.scrollTop + ol.clientHeight) ol.scrollTop = Math.max(0, top - ol.clientHeight / 2);
+  if (cur && q.current !== lastQueueCurrent) {              // the current track at the top, the played ones above it; the list only, never the page
+    ol.scrollTop = cur.offsetTop - ol.offsetTop;
   }
   lastQueueCurrent = q.current;
 }
