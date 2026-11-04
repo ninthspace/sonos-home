@@ -24,7 +24,5 @@ button:disabled { opacity: .7; cursor: default; }
 #note { min-height: 1.4em; margin: .9rem 0 0; color: var(--mute); overflow-wrap: anywhere; }
 #note.error { color: var(--ink); border-left: 4px solid var(--signal); padding-left: .6rem; }
 @media (prefers-reduced-motion: no-preference) { button { transition: transform .08s, box-shadow .08s, filter .12s; } }
-.check { display: flex; align-items: center; gap: .55rem; margin: .9rem 0 0; font: 500 1rem var(--body); color: var(--ink); }
-.check input { width: 1.15rem; height: 1.15rem; accent-color: var(--signal); }
 #found { min-height: 0; margin: .8rem 0 0; color: var(--mute); }
 #found:empty { display: none; }

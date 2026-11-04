@@ -1,31 +1,46 @@
 """Drives "Stream tab" through the real extension's popup in branded Chrome against the fake-rooms service (epic 01-07 Story 3).
 Not collected by pytest.
 
-    uv run python tests/extension_harness/stream_driver.py
+    .venv/bin/python tests/extension_harness/stream_driver.py               # needs port 8737 free
+    .venv/bin/python tests/extension_harness/stream_driver.py --port 8747   # a copy of the extension patched to that port
 
-Starts `sonos service run --fake-rooms` on :8737 (this extension's ID in `extension_ids`), serves the 440 Hz tone page and a plain
-page on 127.0.0.1:8798, launches Chrome as in README.md, loads the unmodified `extension/`, and for each scenario prints
+Starts `sonos service run --fake-rooms` from .venv on :8737, or the --port given (this extension's ID in `extension_ids`), serves the
+440 Hz tone page and a plain page on 127.0.0.1:8798, launches Chrome as in README.md, loads `extension/` (unmodified on 8737, else a
+copy whose `localhost:8737` is patched to the port), refuses to start if that port is already taken, and for each scenario prints
 `OBS name: value` lines. The listener reads the service's `/live/<id>.mp3` over a raw socket and measures the tone with ffmpeg.
 """
 
-import asyncio, json, os, re, shutil, signal, socket, struct, subprocess, sys, tempfile, time, urllib.error, urllib.request
+import asyncio, json, os, shutil, signal, socket, struct, subprocess, sys, tempfile, time, urllib.error, urllib.request
 import websockets
 
+PORT = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv else 8737
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 EXT = os.path.join(ROOT, "extension")
 EXTID = open(os.path.join(HERE, "extid.txt")).read().strip()
-SERVICE = "http://localhost:8737"
+SERVICE = f"http://localhost:{PORT}"
 PAGES = "http://127.0.0.1:8798"
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"   # the harness drives Chrome, not the service: any ffmpeg will do
-# "Also play here" is held back LOCAL_DELAY_S (docs/quick/05): wait past it before reading the local branch, or "on" reads like "off"
-LOCAL_WAIT = float(re.search(r"const LOCAL_DELAY_S = ([0-9.]+);", open(os.path.join(EXT, "offscreen.js")).read()).group(1)) + 1.5
 
 cfgdir = tempfile.mkdtemp(prefix="sonos-stream-cfg-")
 open(os.path.join(cfgdir, "config.toml"), "w").write(f'extension_ids = ["{EXTID}"]\n')
 svc_log = open(os.path.join(cfgdir, "service.log"), "w")
-svc = subprocess.Popen(["uv", "run", "sonos", "service", "run", "--fake-rooms", "--port", "8737"], cwd=ROOT,
+try:                                           # never drive a real service: the popup would stream to real rooms
+    socket.create_connection(("127.0.0.1", PORT), timeout=1).close()
+    sys.exit(f"port {PORT} is in use (the installed service?): stop it first, or pass --port with a free one")
+except OSError:
+    pass
+if PORT != 8737:                               # the extension only talks to localhost:8737: load a copy that talks to PORT instead
+    copy = os.path.join(tempfile.mkdtemp(prefix="sonos-ext-"), "extension")
+    shutil.copytree(EXT, copy)
+    for name in ("popup.js", "offscreen.js", "manifest.json"):
+        path = os.path.join(copy, name)
+        src = open(path).read()
+        assert "localhost:8737" in src, name
+        open(path, "w").write(src.replace("localhost:8737", f"localhost:{PORT}"))
+    EXT = copy
+svc = subprocess.Popen([os.path.join(ROOT, ".venv", "bin", "sonos"), "service", "run", "--fake-rooms", "--port", str(PORT)], cwd=ROOT,
                        env=dict(os.environ, SONOS_CLI_CONFIG_DIR=cfgdir), stdout=svc_log, stderr=subprocess.STDOUT, start_new_session=True)
 pages_dir = tempfile.mkdtemp(prefix="sonos-pages-")
 shutil.copy(os.path.join(HERE, "page.html"), os.path.join(pages_dir, "tone.html"))
@@ -53,8 +68,8 @@ def live_url_of(uid):
 
 
 def listen(session_id, seconds):
-    s = socket.create_connection(("127.0.0.1", 8737), timeout=5)
-    s.sendall(f"GET /live/{session_id}.mp3 HTTP/1.1\r\nHost: localhost:8737\r\n\r\n".encode())
+    s = socket.create_connection(("127.0.0.1", PORT), timeout=5)
+    s.sendall(f"GET /live/{session_id}.mp3 HTTP/1.1\r\nHost: localhost:{PORT}\r\n\r\n".encode())
     data, end = b"", time.time() + seconds
     s.settimeout(0.5)
     while time.time() < end:
@@ -81,7 +96,7 @@ def tone_hz(mp3):
 
 def is_404(session_id):
     try:
-        urllib.request.urlopen(f"http://127.0.0.1:8737/live/{session_id}.mp3", timeout=3).close()
+        urllib.request.urlopen(f"http://127.0.0.1:{PORT}/live/{session_id}.mp3", timeout=3).close()
         return False
     except urllib.error.HTTPError as e:
         return e.code == 404
@@ -145,7 +160,7 @@ async def main():
         targets = (await c.send("Target.getTargets"))["result"]["targetInfos"]
         sw = next(t for t in targets if t["type"] == "service_worker" and EXTID in t["url"])
         sw_sid = (await c.send("Target.attachToTarget", {"targetId": sw["targetId"], "flatten": True}))["result"]["sessionId"]
-        obs("manifest permissions (unmodified)", await c.eval("JSON.stringify(chrome.runtime.getManifest().permissions) + JSON.stringify(chrome.runtime.getManifest().host_permissions)", sw_sid))
+        obs("manifest permissions" + (" (unmodified)" if PORT == 8737 else f" (a copy patched to port {PORT})"), await c.eval("JSON.stringify(chrome.runtime.getManifest().permissions) + JSON.stringify(chrome.runtime.getManifest().host_permissions)", sw_sid))
 
         async def open_page(name):
             r = await c.send("Target.createTarget", {"url": f"{PAGES}/{name}"})
@@ -155,7 +170,7 @@ async def main():
             return tid
 
         async def open_popup():
-            out = await c.eval("chrome.windows.getLastFocused().then(w => chrome.action.openPopup({windowId: w.id})).then(() => 'opened', e => 'ERR ' + e.message)", sw_sid, gesture=True)
+            out = await c.eval("chrome.windows.getLastFocused().then(w => chrome.windows.update(w.id, {focused: true})).then(w => chrome.action.openPopup({windowId: w.id})).then(() => 'opened', e => 'ERR ' + e.message)", sw_sid, gesture=True)
             for _ in range(40):
                 await asyncio.sleep(0.15)
                 ts = (await c.send("Target.getTargets"))["result"]["targetInfos"]
@@ -170,10 +185,8 @@ async def main():
             await c.send("Target.closeTarget", {"targetId": tid})
             await asyncio.sleep(0.4)
 
-        async def pick(sid, room, also=None):
+        async def pick(sid, room):
             await c.eval(f"document.getElementById('room').value = '{uid[room]}'; document.getElementById('room').dispatchEvent(new Event('change')); 1", sid)
-            if also is not None:
-                await c.eval(f"document.getElementById('local').checked = {str(also).lower()}; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
 
         async def click(sid, label):
             return await c.eval(f"[...document.querySelectorAll('#actions button')].find(b => b.textContent === '{label}').click(); 1", sid)
@@ -197,20 +210,6 @@ async def main():
                 await asyncio.sleep(0.2)
             return None
 
-        async def offscreen_level():
-            ts = (await c.send("Target.getTargets"))["result"]["targetInfos"]
-            off = next((t for t in ts if t["url"].startswith(f"chrome-extension://{EXTID}/offscreen.html")), None)
-            if not off:
-                return None
-            sid = (await c.send("Target.attachToTarget", {"targetId": off["targetId"], "flatten": True}))["result"]["sessionId"]
-            levels = []
-            for _ in range(5):
-                value = await c.eval("self.localLevel()", sid)
-                levels.append("null" if value is None else round(value, 4))        # null: nothing is captured, which must never pass for a quiet branch
-                await asyncio.sleep(0.2)
-            await c.send("Target.detachFromTarget", {"sessionId": sid})
-            return levels
-
         async def ended_within(session_id, room, limit=8, since=None):
             t0 = since or time.time()
             while time.time() - t0 < limit:
@@ -222,8 +221,9 @@ async def main():
         # ---- 1: stream the tone tab; keep going with the popup closed and the tab in the background -------------------------
         tone = await open_page("tone.html")
         pop, sid = await open_popup()
+        obs("1 popup controls (labels, selects, checkboxes)", await c.eval("JSON.stringify({labels: [...document.querySelectorAll('label')].map(l => l.textContent.trim()), selects: document.querySelectorAll('select').length, checkboxes: document.querySelectorAll('input[type=checkbox]').length})", sid))
         obs("1 buttons on the tone page", await buttons(sid))
-        await pick(sid, "Kitchen", also=False)
+        await pick(sid, "Kitchen")
         await click(sid, "Stream tab")
         stream_id = await wait_live("Kitchen")
         obs("1 popup note after Stream tab", await note(sid))
@@ -263,7 +263,7 @@ async def main():
 
         # ---- 2b: closing the tab ends it within 5 s, and the popup says why ------------------------------------------------------
         pop, sid = await open_popup()
-        await pick(sid, "Kitchen", also=False)
+        await pick(sid, "Kitchen")
         await click(sid, "Stream tab")
         stream_id = await wait_live("Kitchen")
         await close(pop)
@@ -279,55 +279,17 @@ async def main():
         await close(pop)
         await c.send("Target.closeTarget", {"targetId": plain})
 
-        # ---- 3: Also play here: the local branch carries the tone only when it is on -------------------------------------------------
-        for also in (False, True):
-            tone = await open_page("tone.html")
-            pop, sid = await open_popup()
-            await pick(sid, "Kitchen", also=also)
-            await click(sid, "Stream tab")
-            stream_id = await wait_live("Kitchen")
-            obs(f"3 also play here {'on' if also else 'off'}: the stream is answering", bool(stream_id) and not is_404(stream_id))
-            await asyncio.sleep(LOCAL_WAIT)
-            obs(f"3 also play here {'on' if also else 'off'}: level on the local branch (RMS, 5 readings; null would mean nothing is captured)", await offscreen_level())
-            await click(sid, "Stop")
-            await ended_within(stream_id, "Kitchen")
-            await close(pop)
-            await c.send("Target.closeTarget", {"targetId": tone})
-            await asyncio.sleep(1)
-
-        # ---- 3b: Also play here switched on and off while the stream runs -----------------------------------------------------------
-        tone = await open_page("tone.html")
-        pop, sid = await open_popup()
-        await pick(sid, "Kitchen", also=False)
-        await click(sid, "Stream tab")
-        stream_id = await wait_live("Kitchen")
-        await asyncio.sleep(1.2)
-        obs("3b the stream is answering", bool(stream_id) and not is_404(stream_id))
-        obs("3b off at the start", await offscreen_level())
-        await c.eval("document.getElementById('local').checked = true; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
-        await asyncio.sleep(LOCAL_WAIT)
-        obs("3b ticked while streaming", await offscreen_level())
-        await c.eval("document.getElementById('local').checked = false; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
-        await asyncio.sleep(1.0)
-        obs("3b the stream is still answering", not is_404(stream_id))
-        obs("3b unticked while streaming", await offscreen_level())
-        await click(sid, "Stop")
-        await ended_within(stream_id, "Kitchen")
-        await close(pop)
-        await c.send("Target.closeTarget", {"targetId": tone})
-        await asyncio.sleep(1)
-
         # ---- 4: a second stream stops the first -----------------------------------------------------------------------------------------
         tone1 = await open_page("tone.html")
         pop, sid = await open_popup()
-        await pick(sid, "Kitchen", also=False)
+        await pick(sid, "Kitchen")
         await click(sid, "Stream tab")
         first_id = await wait_live("Kitchen")
         await close(pop)
         tone2 = await open_page("tone.html")
         pop, sid = await open_popup()
         obs("4 buttons on the second tone tab while the first streams", await buttons(sid))
-        await pick(sid, "Lounge", also=False)
+        await pick(sid, "Lounge")
         t0 = time.time()
         await click(sid, "Stream tab")
         second_id = await wait_live("Lounge")
@@ -344,10 +306,10 @@ async def main():
         await asyncio.sleep(1)
 
         # ---- 5: the tab is closed while the service is still answering (the service process is paused while the start is pending) ----
-        pids = subprocess.run(["pgrep", "-f", "sonos service run --fake-rooms --port 8737"], capture_output=True, text=True).stdout.split()
+        pids = subprocess.run(["pgrep", "-f", f"sonos service run --fake-rooms --port {PORT}"], capture_output=True, text=True).stdout.split()
         tone = await open_page("tone.html")
         pop, sid = await open_popup()
-        await pick(sid, "Kitchen", also=False)
+        await pick(sid, "Kitchen")
         for pid in pids:
             os.kill(int(pid), signal.SIGSTOP)
         try:
@@ -376,11 +338,11 @@ async def main():
         obs("5 streams still answering", sessions)
         await close(pop)
 
-        # ---- 6: Stop pressed during a pending start, and Also play here ticked during one (the service is paused again) -----------------
-        for label, action in (("6a Stop while the start is pending", "stop"), ("6b Also play here ticked while the start is pending", "tick")):
+        # ---- 6: Stop pressed during a pending start (the service is paused again) ------------------------------------------------------
+        for label, action in (("6a Stop while the start is pending", "stop"),):
             tone = await open_page("tone.html")
             pop, sid = await open_popup()
-            await pick(sid, "Kitchen", also=False)
+            await pick(sid, "Kitchen")
             for pid in pids:
                 os.kill(int(pid), signal.SIGSTOP)
             await click(sid, "Stream tab")
@@ -396,17 +358,6 @@ async def main():
                     os.kill(int(pid), signal.SIGCONT)
                 await asyncio.sleep(2.5)
                 obs(f"{label}: Kitchen state / streams answering after the service resumed", [service(f"/api/rooms/{uid['Kitchen']}/state")["state"], bool(live_url_of(uid['Kitchen']) and not is_404(live_url_of(uid['Kitchen'])))])
-            else:
-                await c.eval("document.getElementById('local').checked = true; document.getElementById('local').dispatchEvent(new Event('change')); 1", sid)
-                await asyncio.sleep(0.5)
-                for pid in pids:
-                    os.kill(int(pid), signal.SIGCONT)
-                stream_id = await wait_live("Kitchen")
-                await asyncio.sleep(LOCAL_WAIT)
-                obs(f"{label}: the stream is answering", bool(stream_id) and not is_404(stream_id))
-                obs(f"{label}: level on the local branch", await offscreen_level())
-                await click(sid, "Stop")
-                await ended_within(stream_id, "Kitchen")
             await close(pop)
             await c.send("Target.closeTarget", {"targetId": tone})
             await asyncio.sleep(1)
@@ -418,7 +369,7 @@ finally:
     chrome.terminate()
     pages.terminate()
     try:
-        os.killpg(svc.pid, signal.SIGTERM)                                  # uv and the Python it starts
+        os.killpg(svc.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     print("service log:", os.path.join(cfgdir, "service.log"))

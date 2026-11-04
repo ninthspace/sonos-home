@@ -1,7 +1,8 @@
 # "Also play here" plays in step with the speaker
 
 **Date**: 2026-11-04  
-**Status**: In Progress  
+**Status**: Complete  
+**Amended**: reverted, and "Also play here" removed, by docs/quick/06: the user wanted the video in step with the speaker, which this doesn't give; the [user] criterion is no longer checkable (2026-11-04) — cited: spec FR20 (withdrawn), the user's decision in chat on 2026-11-04  
 **Source**: the user's question in chat (2026-11-04): can the YouTube delays be synced up? Agreed: delay the Mac's own copy of a streamed tab ("Also play here", FR20) by about the speaker's delay so the two sound together; the video picture can't be held back, and the speaker's ~3–4 s buffer can't be shortened. "Exact syncing is not necessary so nudging isn't necessary": one fixed delay, no adjust control. Spec FR20, NFR2 (first figure: roughly 3.6–4.7 s tab to speaker on Office), epic 01-07 Story 3.  
 **Effort**: medium  
 **Audit**: pass after fixes (2026-11-04), 2 rounds: round 1 (1 Warning: `stream_driver.py` read the local branch 1.5–3 s in, which the 4 s delay makes read like off, and epic 01-07 Story 3's FR20 Evidence described the undelayed behaviour; Suggestions taken: evidence quoting the replaced build, the log's labels, FR20's "off needs no code"; not taken: smoothing the gain step) and round 2 (pass)  
@@ -18,7 +19,7 @@
 - README's Chrome extension section and spec FR20 say the local copy plays about 4 s late, in step with the speaker. `[manual]`
   - Evidence: README.md's Chrome extension section now reads "*Also play here* keeps the tab audible on this Mac while it streams, held back about 4 s so it sounds together with the speaker"; spec FR20 says the local copy goes through a fixed delay of about 4 s and the stream to the service is not delayed, with a header Amended line — red: n/a — manual
 - On Office with "Also play here" on, a YouTube tab heard from the Mac and from the Office sounds roughly together (no echo of several seconds). `[user]`
-  - Waiting on user: on a Mac with the reloaded extension (chrome://extensions → the reload arrow on Sonos at home), stream a YouTube music video to Office with Also play here ticked, and say whether the Mac and the Office sound roughly together.
+  - Evidence (user, 2026-11-04): not tried; the user had this change reverted and the option removed (docs/quick/06) before checking it, so there is nothing left to check — red: n/a — user
 
 ### Delay the local branch
 **Task**: 5.1  

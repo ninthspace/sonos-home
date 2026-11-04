@@ -47,7 +47,7 @@ async function stopNow(reason) {
   await ended(reason);
 }
 
-async function startNow({ tabId, room, alsoPlay }) {
+async function startNow({ tabId, room }) {
   if (typeof tabId !== "number" || typeof room !== "string") return { error: "Pick a room and a tab first." };
   await stopNow("replaced");                                     // starting a second stream stops the first, so only one runs
   let streamId;
@@ -59,7 +59,7 @@ async function startNow({ tabId, room, alsoPlay }) {
   // Recorded before the service answers (which takes seconds on a real speaker), so closing the tab or pressing Stop meanwhile is seen.
   await setState({ streaming: true, starting: true, tabId, room, startedAt: Date.now() });
   await ensureOffscreen();
-  const r = await chrome.runtime.sendMessage({ target: "offscreen", type: "capture-start", streamId, room, alsoPlay: !!alsoPlay }).catch((e) => ({ error: e.message }));
+  const r = await chrome.runtime.sendMessage({ target: "offscreen", type: "capture-start", streamId, room }).catch((e) => ({ error: e.message }));
   const now = await getState();
   if (!r || r.error) {
     // Why it didn't start can arrive here before (or after) the offscreen document's own capture-ended report: record it from this
@@ -92,11 +92,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       .then(() => serial(() => stopNow("stop")))
       .then(() => respond({ ok: true }), (e) => respond({ error: e.message }));
     return true;
-  }
-  if (msg.type === "local") {
-    chrome.runtime.sendMessage({ target: "offscreen", type: "local", on: !!msg.on }).catch(() => { /* nothing streaming */ });
-    respond({ ok: true });
-    return false;
   }
   return false;
 });

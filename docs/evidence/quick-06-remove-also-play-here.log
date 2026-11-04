@@ -1,0 +1,34 @@
+# quick 06 browser checks, 2026-11-04 (extension copy patched to port 8747; fake-rooms service from .venv on 8747; the user's service on 8737 untouched)
+# note: 'manifest permissions (unmodified)' lines below come from the driver before its label was fixed; they show the copy patched to 8747
+## second stream_driver --port 8747 run (popup never opened)
+OBS browser: Chrome/156.0.8078.80
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS manifest permissions (unmodified): ["tabCapture","offscreen","storage","activeTab","scripting"]["http://localhost:8747/*"]
+## first stream_driver --port 8747 run, same build (the popup's controls weren't logged then)
+OBS loaded extension id: fjgldlknkfejofhiebpnaiepahdhknpp (expected fjgldlknkfejofhiebpnaiepahdhknpp)
+OBS manifest permissions (unmodified): ["tabCapture","offscreen","storage","activeTab","scripting"]["http://localhost:8747/*"]
+OBS 1 buttons on the tone page: ["Stream tab"]
+OBS 1 popup note after Stream tab: Streaming this tab to Kitchen.
+OBS 1 Kitchen reports our stream: True
+OBS 1 listener head: HTTP/1.0 200 OK
+OBS 1 tone at first listen (Hz, ffmpeg stderr): (440.0, '')
+OBS 1 after 8 s with the popup closed and the tab in the background: bytes: 173760
+OBS 1 tone then (Hz, ffmpeg stderr): (440.0, '')
+OBS 1 Kitchen state: PLAYING
+OBS 2a buttons while streaming: ["Stream tab","Stop"]
+OBS 2a seconds from Stop to /live/<id>.mp3 answering 404: 0.2
+OBS 2a Kitchen state after Stop: STOPPED
+OBS 2a popup note about 0.2 s after Stop was clicked: You stopped the stream (stop).
+(the run then stopped at 2b: "Cannot show popup for an inactive window"; the second run, after the driver asked Chrome to focus the window, failed the same way at scenario 1)
+## scratch check: the popup page in a tab, the start/stop messages its buttons send
+OBS browser: Chrome/156.0.8078.80
+OBS loaded id: {'id': 'fjgldlknkfejofhiebpnaiepahdhknpp'}
+OBS popup page controls: {"labels":["Room"],"selects":1,"checkboxes":0,"text":false}
+OBS popup storage alsoPlay after load: {}
+OBS tabs (id, index): about:blank, tone, popup: [[1246688199,0],[1246688200,1],[1246688201,2]]
+OBS start reply (the message Stream tab sends): {"ok":true}
+OBS stream answering: True
+OBS stream tone Hz (first 3 s): 440.2
+OBS stop reply (the message Stop sends): {"ok":true}
+OBS seconds from Stop to /live 404: 0.0
+OBS Kitchen after Stop: STOPPED

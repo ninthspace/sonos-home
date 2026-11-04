@@ -134,12 +134,7 @@ async function start() {
   const tab = await activeTab();
   const status = (await chrome.runtime.sendMessage({ type: "status" }).catch(() => null)) || { streaming: false };
   let page = null;
-  const { alsoPlay } = await chrome.storage.local.get("alsoPlay");
-  $("local").checked = !!alsoPlay;                                    // off unless the user turned it on
-  $("local").addEventListener("change", () => {
-    chrome.storage.local.set({ alsoPlay: $("local").checked });
-    chrome.runtime.sendMessage({ type: "local", on: $("local").checked }).catch(() => { /* nothing is streaming */ });      // takes effect now, mid-stream
-  });
+  chrome.storage.local.remove("alsoPlay").catch(() => {});        // the old "Also play here" setting, gone with the option
   $("stop").hidden = !status.streaming;                              // Stop is there from the start while a stream runs
   if (status.streaming) say((status.starting ? "Starting a stream to " : "Streaming a tab to ") + (roomName(status.room) || "a room") + ".");
   else if (status.last) say(endedText(status.last), status.last.reason === "service-error");
@@ -162,7 +157,7 @@ async function start() {
     if (!tab || $("stream").disabled) return;
     $("stream").disabled = true;
     say("Starting…");
-    const r = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, room: $("room").value, alsoPlay: $("local").checked }).catch((e) => ({ error: e.message }));
+    const r = await chrome.runtime.sendMessage({ type: "start", tabId: tab.id, room: $("room").value }).catch((e) => ({ error: e.message }));
     $("stream").disabled = false;
     if (r && r.error) say(r.reason ? endedText({ reason: r.reason }) : r.error, true);
     else { say("Streaming this tab to " + ($("room").selectedOptions[0] || {}).textContent + "."); show(...visibleNow(), "stop"); }

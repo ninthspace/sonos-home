@@ -55,3 +55,21 @@ def test_the_service_accepts_the_configured_extension_and_refuses_another_origin
         assert client.post("/api/send/preview", json=body, headers=headers).status_code == 403, origin
     unconfigured = app_for(tmp_path, [])
     assert unconfigured.post("/api/send/preview", json=body, headers={**JSON, "Origin": f"chrome-extension://{mine}"}).status_code == 403
+
+
+def test_the_extension_has_no_also_play_here_left():
+    """docs/quick/06: no local-playback branch or its setting; only the line that clears the old stored preference names it."""
+    gone = ("wantLocal", "localLevel", "LOCAL_DELAY_S", "setLocal", "createDelay", "createAnalyser", "Also play here", 'id="local"',
+            '$("local")', 'type: "local"', 'msg.type === "local"', "alsoPlay: ")
+    found = []
+    for path in sorted((ROOT / "extension").iterdir()):
+        if path.suffix not in (".js", ".html", ".css", ".json"):
+            continue
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if 'chrome.storage.local.remove("alsoPlay")' in line:
+                continue
+            found += [f"{path.name}:{n}: {word}" for word in gone if word in line]
+            if "alsoPlay" in line:
+                found.append(f"{path.name}:{n}: alsoPlay")
+    assert found == []
+    assert 'chrome.storage.local.remove("alsoPlay")' in (ROOT / "extension" / "popup.js").read_text()      # the stale setting is cleared
