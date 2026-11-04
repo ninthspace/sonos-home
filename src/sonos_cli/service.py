@@ -836,9 +836,8 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
             res = (getattr(item, "resources", None) or [None])[0]
             uri = getattr(res, "uri", "") if res is not None else ""
             source = classify_source(uri, hosts, serve_port)
-            artist = getattr(item, "creator", "") or ""
-            out.append({"index": i, "uri": uri, "title": remote_mod.queue_title(uri, getattr(item, "title", "") or uri, artist),
-                        "artist": artist,
+            title, artist = remote_mod.track_label(uri, getattr(item, "title", "") or uri, getattr(item, "creator", "") or "")
+            out.append({"index": i, "uri": uri, "title": title, "artist": artist,
                         "host": source[len("other-host:"):] if source.startswith("other-host:") else None})
         track = state.get("track") or {}
         current = track.get("index")

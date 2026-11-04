@@ -83,6 +83,9 @@ def verify(token: str, secret: bytes) -> str:
 _EXT = {"audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/aac": ".aac", "audio/flac": ".flac", "audio/ogg": ".ogg"}
 
 
+NAME_CAP = 240                       # the longest proxy URL file name, encoded
+
+
 def display_name(title: str, mime: str) -> str:
     """A percent-encoded file name for a track's proxy URL. Sonos titles a track from the last part of its URL.
 
@@ -92,29 +95,45 @@ def display_name(title: str, mime: str) -> str:
     stem = " ".join(stem.split())[:240]                          # every character encodes to at least one character: nothing longer can fit
     if stem.lower() == ext or not stem:
         stem = "track"
-    while stem and len(quote(stem + ext, safe="")) > 240:
-        stem = stem[:max(0, len(stem) - max(1, (len(quote(stem + ext, safe="")) - 240) // 12))]       # at most 12 encoded characters per character
+    while stem and len(quote(stem + ext, safe="")) > NAME_CAP:
+        stem = stem[:max(0, len(stem) - max(1, (len(quote(stem + ext, safe="")) - NAME_CAP) // 12))]       # at most 12 encoded characters per character
     return quote((stem.rstrip() or "track") + ext, safe="")
 
 
-def queue_title(uri: str, title: str, artist: str) -> str:
-    """The title to show for a queue item. S1 players read a file's tags only for the track playing and the next one; every
-    other track of a page comes back titled by the last part of its proxy URL (`Tideway.mp3`) with no artist. That fallback is
-    turned back into the name we gave the URL (`display_name`'s name, decoded, without the extension: the page's title, or
-    `Title by Artist` when it named an artist). A title the speaker took from
-    tags, or any item that isn't one of our /remote/ URLs, is left alone."""
-    if artist:
-        return title
+def track_label(uri: str, title: str, artist: str) -> tuple[str, str]:
+    """The (title, artist) to show for a queue item or the playing track (docs/quick/08).
+
+    The service names a page track's proxy URL `Title by Artist.ext` (`display_name`; `Title.ext` when the page names no
+    artist). An S1 speaker titles a track it hasn't read tags for by that file name, with no artist; once it has read the tags
+    it reports their title and, when the file has a track-artist tag, their artist. Many releases tag only the album artist, so
+    the artist then comes back empty. So, for one of our /remote/ URLs: the speaker's artist always wins; with none, an unread
+    track's name is split at its one " by " (not at none or several: nothing is guessed), and a read track whose title starts
+    the name, followed by " by ", gets the rest as its artist. Anything else is left as the speaker reported it."""
     parts = urlsplit(uri).path.split("/")
     if len(parts) != 4 or parts[1] != "remote" or not parts[3]:
-        return title
+        return title, artist
     name = unquote(parts[3])
-    if title != name:
-        return title
+    stem = name
     for ext in _EXT.values():
         if name.lower().endswith(ext) and len(name) > len(ext):
-            return name[:-len(ext)]
-    return title
+            stem = name[:-len(ext)]
+            break
+    unread = not title or title == name
+    if artist:
+        return (stem if unread else title), artist
+    if len(parts[3]) > NAME_CAP - 15:
+        # `display_name` may have cut this name at its cap, which can cut into the artist: a fragment must never pass for the
+        # whole artist, so a name this long gives none. A cut name is at least 226 encoded characters: each trim stops within
+        # one character (12 encoded at most) of the cap, and the one trailing space it may leave (3) is then stripped.
+        return (stem if unread else title), ""
+    if unread:
+        pieces = stem.split(" by ")
+        if len(pieces) == 2 and pieces[0].strip() and pieces[1].strip():
+            return pieces[0], pieces[1]
+        return stem, ""
+    if stem.startswith(title + " by ") and stem[len(title) + 4:].strip():
+        return title, stem[len(title) + 4:]
+    return title, ""
 
 
 def is_public(ip: str) -> bool:

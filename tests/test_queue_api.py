@@ -187,20 +187,21 @@ def test_queue_titles_that_are_not_the_proxy_file_name_are_left_alone(tmp_path):
     rows = [("Tideway.mp3", "", "http://127.0.0.1:8737/media/abc/Tideway.mp3"),     # a local file is not a proxy URL
             ("Tideway.mp3", "", "http://127.0.0.1:8737/remote/Tideway.mp3"),         # a proxy URL without a name segment
             ("Tide way", "", proxy),                                                    # the speaker has its own title
-            ("Tideway.mp3", "Someone", proxy)]                                          # tags came with an artist
+            ("Tideway.mp3", "Someone", proxy)]                                          # an artist came with it: the name's stem as the title
     for t, a, u in rows:
         system.lounge.add_to_queue(_s1_item(t, a, u))
     items = client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["items"]
-    assert [i["title"] for i in items] == ["Tideway.mp3", "Tideway.mp3", "Tide way", "Tideway.mp3"]
+    assert [(i["title"], i["artist"]) for i in items] == [("Tideway.mp3", ""), ("Tideway.mp3", ""), ("Tide way", ""), ("Tideway", "Someone")]
 
 
 @pytest.mark.parametrize("title,mime", [("Tideway", "audio/mpeg"), ("Tideway by SHTL", "audio/mpeg"), ("a.b.c", "audio/mp4"), ("x" * 300, "audio/mpeg"), ("", "audio/mpeg"), ("///", "audio/aac")])
-def test_queue_title_inverts_display_name_for_any_title(title, mime):
+def test_an_unread_label_reads_back_as_the_names_stem_for_any_title(title, mime):
     from sonos_cli import remote
     name = remote.display_name(title, mime)
     from urllib.parse import unquote
-    got = remote.queue_title(f"http://h:1/remote/T/{name}", unquote(name), "")
-    assert got == unquote(name).rsplit(".", 1)[0] and not got.endswith((".mp3", ".m4a", ".aac"))
+    t, a = remote.track_label(f"http://h:1/remote/T/{name}", unquote(name), "")
+    shown = t + (f" by {a}" if a else "")                       # as the page shows it
+    assert shown == unquote(name).rsplit(".", 1)[0] and not t.endswith((".mp3", ".m4a", ".aac"))
 
 
 def test_the_jump_refreshes_the_cached_state_before_it_answers(tmp_path):
@@ -214,3 +215,83 @@ def test_the_jump_refreshes_the_cached_state_before_it_answers(tmp_path):
     assert r.status_code == 200
     after = client.get(f"/api/rooms/{system.lounge.uid}/state").json()          # no refresh in between
     assert after["track"]["index"] == 2 and after["updated"] > before["updated"]
+
+
+# ---- docs/quick/08: a page track keeps its artist when its file has no artist tag ----------------------------------------
+
+LABEL_CASES = [("Z0NE2", "Z0NE"), ("Tideway", "SHTL"), ("Song by Night", "Band"), ("Song", "Smith by Jones"), ("Café 日本", "Ünïcode"),
+               ("Tideway", ""), ("Song by Night", ""), ("x" * 300, "Long"),
+               ("日本語の曲名です" * 3, "アーティスト名前"),                   # the cap cuts into the artist: "… by ア" must not pass for it
+               ("x" * 220, "Artist"),                                         # long but not cut: still at the cap's edge, so no artist
+               ("x" * 210, "Bjork 🎵🎵")]                                      # cut to 227 encoded characters, mid-artist (audit round 2)
+
+
+@pytest.mark.parametrize("title,artist", LABEL_CASES)
+def test_a_page_track_is_labelled_from_its_url_whether_or_not_the_speaker_read_its_tags(title, artist):
+    from urllib.parse import unquote
+    from sonos_cli import remote
+    name = remote.display_name(f"{title} by {artist}" if artist else title, "audio/mpeg")
+    uri = f"http://h:1/remote/T/{name}"
+    stem = unquote(name)[:-4]
+    # not read yet: the speaker titles it by the file name; shown as the name's stem either way, and an artist only if whole
+    t, a = remote.track_label(uri, unquote(name), "")
+    assert t + (f" by {a}" if a else "") == stem
+    assert a in ("", artist) or (not artist and f"{t} by {a}" == title)          # a page title with one " by " reads the same either way
+    if artist and stem == f"{title} by {artist}" and (f"{title} by {artist}").count(" by ") == 1 and len(name) <= remote.NAME_CAP - 15:
+        assert (t, a) == (title, artist)
+    # read, with the tag title and no artist tag: the page's artist itself, or none, never a part of it
+    t, a = remote.track_label(uri, title, "")
+    assert t == title and a in ("", artist)
+    if artist and stem == f"{title} by {artist}" and len(name) <= remote.NAME_CAP - 15:
+        assert a == artist
+    if len(name) > remote.NAME_CAP - 15:
+        assert a == ""
+    # read, with an artist tag: the speaker's artist wins
+    assert remote.track_label(uri, title, "Tagged") == (title, "Tagged")
+
+
+def test_other_urls_are_left_as_the_speaker_reported_them():
+    from sonos_cli import remote
+    for uri in ("http://h:1/media/abc/Z0NE2 by Z0NE.mp3", "http://h:1/remote/Z0NE2 by Z0NE.mp3", "", "x-rincon-mp3radio://h/live/1.mp3"):
+        assert remote.track_label(uri, "Z0NE2", "") == ("Z0NE2", "")
+
+
+def test_the_z0ne_queue_shows_the_artist_on_every_row(tmp_path):
+    """The case the user saw: the release's MP3s tag only the album artist, so read tracks come back without one."""
+    from sonos_cli import remote
+    system, music, cfg, lib, monitor, client = setup_api(tmp_path)
+    base = "http://127.0.0.1:8737/remote/TOKEN"
+    url = lambda t: f"{base}/{remote.display_name(f'{t} by Z0NE', 'audio/mpeg')}"
+    rows = [("Z0NE2", "", url("Z0NE2")), ("Z0NE1", "", url("Z0NE1")), ("Z0NE3 by Z0NE.mp3", "", url("Z0NE3")),
+            ("Tagged", "Someone", f"{base}/{remote.display_name('Tagged by Z0NE', 'audio/mpeg')}"),           # an artist tag wins
+            ("Other", "", url("Z0NE4")),                                                                        # the tag title isn't the name's
+            ("Local", "", "http://127.0.0.1:8737/media/abc/Local by Z0NE.mp3")]                                 # not a page track
+    for t, a, u in rows:
+        system.lounge.add_to_queue(_s1_item(t, a, u))
+    items = client.get(f"/api/rooms/{system.lounge.uid}/queue").json()["items"]
+    assert [(i["title"], i["artist"]) for i in items] == [("Z0NE2", "Z0NE"), ("Z0NE1", "Z0NE"), ("Z0NE3", "Z0NE"),
+                                                          ("Tagged", "Someone"), ("Other", ""), ("Local", "")]
+
+
+def test_a_name_the_cap_cut_never_gives_a_fragment_as_the_artist():
+    """Many random titles and artists (ASCII, spaces, accents, CJK, emoji): whenever `display_name` had to cut the name, the
+    label has no artist, read or unread; when it didn't, an artist is the whole artist or none."""
+    import random
+    from urllib.parse import quote, unquote
+    from sonos_cli import remote
+    rng = random.Random(8)
+    alphabet = "abcxyz  éü日本🎵"
+    for _ in range(4000):
+        title = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 120))).strip() or "t"
+        artist = "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 30))).strip() or "a"
+        full = " ".join(f"{title} by {artist}".split())
+        name = remote.display_name(full, "audio/mpeg")
+        cut = unquote(name)[:-4] != full
+        uri = f"http://h:1/remote/T/{name}"
+        t_unread, a_unread = remote.track_label(uri, unquote(name), "")
+        t_read, a_read = remote.track_label(uri, " ".join(title.split()), "")
+        if cut:
+            assert a_unread == "" and a_read == "", (full, unquote(name), a_unread, a_read)
+        else:
+            assert t_unread + (f" by {a_unread}" if a_unread else "") == full          # shown as the page named it
+            assert a_read in ("", " ".join(artist.split())), (full, a_read)         # the page's whole artist or none

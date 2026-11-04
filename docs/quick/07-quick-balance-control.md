@@ -1,7 +1,7 @@
 # A balance control for each room
 
 **Date**: 2026-11-04  
-**Status**: In Progress  
+**Status**: Complete  
 **Source**: the user in chat (2026-11-04): their left ear hears better than their right, so they need to rebalance the sound ("i want to be able to rebalance … we need to build the thing"). Research (Sonos support "Adjust the bass, treble, balance, and loudness"; the Sonos community; SoCo's `balance` property): balance is the speaker's left and right channel volumes (RenderingControl `LF`/`RF`, 0–100 each, 100/100 centred), offered on Five, Port, Amp, Play:5, Play:3, Connect, Connect:Amp and stereo pairs, not on a single mono speaker. A listening test on Office the same day, with the user in the room: the pair's left channel 50 → 20 moved the sound right, so balance works on the pair and its speakers are on the right sides; it was left at left 38, right 100 at the end of the test, and the user will set Office themselves with the control. Setting it on the pair's visible speaker set both halves. Spec FR9 (room control), FR11 (the UI).  
 **Effort**: medium  
 **Audit**: pass after fixes (2026-11-04), 2 rounds: round 1 (4 Warnings: the pair rule counted a Sub or surrounds as a pair; a renamed pair lost its slider and was called mono; overlapping drags on a real speaker could interleave left and right; the CLI's direct path ignored `--ip`/`$SONOS_IP`; Suggestions taken: the direct path refuses a mono room, values load for rooms that appear later and on opening the view, the slider is disabled until its value is known, a value set during the recovery read isn't lost, import order). The round-1 auditor's probe reached the user's installed service on 8737 with three balance POSTs; that build has no balance route, all three were answered 405 (service log) and nothing changed; round 2 (pass; Suggestions not taken: a Play:1 taken out of a pair keeps SoCo's old `LF` channel until the service restarts, so it shows a slider that does nothing; a read started before a change can redraw the old value until the view is reopened; a room vanishing between two lookups gives a 500)  
@@ -25,7 +25,7 @@
 - README documents the control and the CLI command. `[manual]`
   - Evidence: README's CLI block has `sonos -r Lounge balance 20` with the range, and a paragraph says balance is per room and stored on the speaker, which products have it, and that the Rooms view has a Balance slider and Centre key — red: n/a — manual
 - On the real speakers: moving Office's slider in the UI moves the sound the way the user expects, and the Lounge's does the same. `[user]`
-  - Waiting on user: after reinstalling the service (`uv tool install . --reinstall && sonos service install`), open Rooms, move Office's Balance slider and the Lounge's, and say whether the sound moves the way you expect.
+  - Evidence (user, 2026-11-04): after reinstalling the service from 2058f0e, the user moved the Balance sliders and reported "all works as expected" — red: n/a — user
 
 ### Build it
 **Task**: 7.1  

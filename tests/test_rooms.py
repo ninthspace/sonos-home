@@ -622,3 +622,17 @@ def test_the_metadata_title_reaches_the_room_state(system, monitor, monkeypatch)
 ])
 def test_the_metadata_fallback_is_used_only_where_it_should_be(over, expected):
     assert track_title(office_track(**over)) == expected
+
+
+# ---- docs/quick/08: now playing keeps a page track's artist when its file has no artist tag -----------------------------
+
+def test_now_playing_takes_the_page_artist_when_the_tags_have_none(system, monitor, monkeypatch):
+    play_url(system.lounge, OFFICE_URI)
+    no_artist = office_track(artist="", metadata=didl("Tideway").replace("<dc:creator>SHTL</dc:creator>", ""))
+    monkeypatch.setattr(FakeSoCo, "get_current_track_info", lambda self: no_artist)
+    track = monitor.refresh_group_of(system.lounge.uid)["track"]
+    assert (track["title"], track["artist"]) == ("Tideway", "SHTL")                 # from the URL's "Tideway by SHTL.mp3"
+    tagged = office_track(artist="Someone Else")
+    monkeypatch.setattr(FakeSoCo, "get_current_track_info", lambda self: tagged)
+    track = monitor.refresh_group_of(system.lounge.uid)["track"]
+    assert (track["title"], track["artist"]) == ("Tideway", "Someone Else")         # an artist tag wins

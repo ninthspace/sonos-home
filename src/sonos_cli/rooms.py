@@ -21,7 +21,7 @@ from typing import Callable, Iterable
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
-from . import balance
+from . import balance, remote
 
 OURS_PATHS = ("/media/", "/live/", "/remote/")
 ACTIVE_STATES = {"PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"}
@@ -290,9 +290,10 @@ class RoomMonitor:
             coord = group.coordinator
             members = [{"uid": m.uid, "name": m.player_name, "ip": m.ip_address, "visible": m.is_visible, "channel": member_channel(m)}
                        for m in sorted(group.members, key=lambda m: m.ip_address)]
+            title, artist = remote.track_label(track.get("uri") or "", track_title(track), track.get("artist") or "")
             state = {
                 "state": transport.get("current_transport_state"),
-                "track": {"title": track_title(track), "artist": track.get("artist", ""),
+                "track": {"title": title, "artist": artist,
                           "album": track.get("album", ""), "uri": track.get("uri", ""),
                           "index": _index(track.get("playlist_position"))},
                 "position": track.get("position"), "duration": track.get("duration"),
@@ -430,7 +431,7 @@ def track_title(track: dict) -> str:
     if not found or "://" in found:
         return ""
     # A track with no title tag reports its URL's last segment as its title (`Halyard by SHTL.mp3`): SoCo blanks that on
-    # purpose, and so do we, so the UI falls back to the queue's cleaned label.
+    # purpose, and so do we; for a page track `remote.track_label` then names it from that segment (docs/quick/08).
     name = unquote(urlsplit(track.get("uri") or "").path.rsplit("/", 1)[-1])
     return "" if found == name else found
 

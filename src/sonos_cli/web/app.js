@@ -247,14 +247,14 @@ async function pollState() {
   if (idx !== prevIndex) pollQueue();                      // the track changed: the highlighted row moves
 }
 
-function queueTitle(index) {
+function queueItem(index) {
   // Only when the service says the room is playing that queue item (`current` is null for a radio or line-in source that merely
   // reports track 1), so a stale queue never names audio that isn't from it.
   const q = state.queue;
-  if (!q || index === null || index === undefined || q.current !== index) return "";
-  const item = q.items.find((it) => it.index === index);
-  return item ? item.title : "";
+  if (!q || index === null || index === undefined || q.current !== index) return null;
+  return q.items.find((it) => it.index === index) || null;
 }
+function queueTitle(index) { const item = queueItem(index); return item ? item.title : ""; }
 
 function seconds(t) {
   const m = /^(\d+):(\d\d):(\d\d)$/.exec(t || "");
@@ -446,9 +446,11 @@ function renderPlayer() {
     $("np-meta").textContent = state.unreachable ? "Waiting for the service to answer." : "Pick a room and a file.";
   } else {
     const t = n.track || {};
-    const shown = t.title || queueTitle(t.index);      // a track with no title tag reports none (the service drops its URL file name): use the queue's cleaned label
-    $("np-title").textContent = shown || (n.state === "STOPPED" ? "Nothing playing" : "Playing");
-    if (shown && shown !== lastAnnounced) { lastAnnounced = shown; $("announce").textContent = `Now playing ${shown}`; }
+    const shown = t.title || queueTitle(t.index);      // the service names page tracks itself; any other track that reports no title gets the queue's label
+    const artist = t.artist || (t.title ? "" : (queueItem(t.index) || {}).artist || "");     // as the queue rows show it: "Title by Artist"
+    const heard = shown ? shown + (artist ? ` by ${artist}` : "") : "";
+    $("np-title").textContent = heard || (n.state === "STOPPED" ? "Nothing playing" : "Playing");
+    if (heard && heard !== lastAnnounced) { lastAnnounced = heard; $("announce").textContent = `Now playing ${heard}`; }
     state.meta = { source: sourceLabel(n.source), word: n.state === "PLAYING" ? "playing" : n.state === "PAUSED_PLAYBACK" ? "paused" : "stopped",
                    shown, position: n.position, duration: n.duration };
     renderMeta();
