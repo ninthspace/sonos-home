@@ -2,7 +2,7 @@
 :root {
   --desk: #0b1230; --panel: #141f4b; --line: #243172; --key: #1c2a62; --key-edge: #070c22;
   --ink: #f2f5ff; --mute: #aab6ee; --signal: #ffd23f; --signal-edge: #b58f00; --signal-ink: #0b1230;
-  --blue: #2d68ea; --blue-edge: #1b43a8;
+  --blue: #2d68ea; --blue-edge: #1b43a8; --key-ink: #dfe5ff;
   --cond: "Barlow Condensed", "Avenir Next Condensed", "DIN Condensed", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -11,7 +11,16 @@ html { background: var(--desk); color: var(--ink); font: 15px/1.4 var(--body); c
 body { margin: 0; width: 20rem; padding: 1rem 1.1rem 1.1rem; }
 h1 { margin: 0 0 .9rem; font: 700 1.9rem/1 var(--cond); }
 label { display: block; font: 600 1.1rem/1.2 var(--cond); color: var(--mute); margin-bottom: .3rem; }
-select { width: 100%; background: #101a42; color: var(--ink); border: 2px solid var(--line); border-radius: 8px; padding: .55rem .7rem; font: inherit; }
+/* the room picker looks like a key, as the web page's "Group with…" select: the key's face, edge, type and shape, and a
+   chevron drawn from the key's own ink (a <select> has no ::after, so the wrapper carries it) */
+.key-select { position: relative; display: flex; color: var(--key-ink); }
+.key-select select { -webkit-appearance: none; appearance: none; width: 100%; cursor: pointer; border: 0; border-radius: 8px; padding: .7rem 2.4rem .7rem 1rem;
+  background: var(--key); color: inherit; box-shadow: 0 4px 0 var(--key-edge); font: 600 1.3rem/1.1 var(--cond); letter-spacing: .02em; text-overflow: ellipsis; }
+.key-select select:disabled { cursor: default; opacity: .7; }
+.key-select:hover:has(select:not(:disabled)) { filter: brightness(1.12); }
+.key-select::after { content: ""; position: absolute; right: 1.1rem; top: 50%; width: .55rem; height: .55rem; border: solid currentColor; border-width: 0 2px 2px 0;
+  transform: translateY(-75%) rotate(45deg); pointer-events: none; }
+.key-select option { background: var(--panel); color: var(--ink); font: 400 1rem var(--body); }
 #actions { display: flex; flex-direction: column; gap: .7rem; margin-top: 1rem; }
 button { cursor: pointer; border: 0; border-radius: 8px; padding: .7rem 1rem; font: 600 1.3rem/1.1 var(--cond); letter-spacing: .02em; background: var(--blue); color: #fff; box-shadow: 0 4px 0 var(--blue-edge); }
 button:hover:not(:disabled) { filter: brightness(1.12); }

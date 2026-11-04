@@ -58,6 +58,11 @@ class NothingPlayable(PlayError):
     status = 422
 
 
+class NoBalance(PlayError):
+    """The room's speaker has no balance setting (a single mono speaker)."""
+    status = 422
+
+
 class NameTaken(PlayError):
     status = 409
 

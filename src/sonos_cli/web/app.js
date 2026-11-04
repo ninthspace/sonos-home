@@ -14,7 +14,7 @@ const state = {
   rooms: [], roomUid: store.get("room"), roots: [], path: "", parent: null,
   entries: [], nextOffset: null, filter: "", now: null, unreachable: false, draggingVolume: false, folderError: false,
   anchor: null, holdUntil: 0, holdUid: null, frame: 0, meta: null,
-  jump: null, jumpNote: "", jumpNoteTimer: 0,
+  jump: null, jumpNote: "", jumpNoteTimer: 0, balance: {},
   folders: { editable: false, list: [], configPath: "" }, folderBusy: false, fp: { path: "", parent: null },
   seek: { dragging: false, preview: null, uid: null, pointerId: null, seq: 0, keyTarget: null, keyTimer: 0, holdUntil: 0, holdUid: null, noteTimer: 0 },
   view: "music", playlists: [], plOpen: null, plDetail: null, plConfirmDelete: false, plArmedAt: 0, plFocus: null,
@@ -67,6 +67,7 @@ async function pollRooms() {
       selectRoom(state.rooms[0].uid);                                   // the selected room vanished: switch as a click would (queue, jump and seek state cleared)
     }
     renderRooms();
+    if (state.view === "rooms") loadBalances(false);                      // a room that has just appeared gets its value
   } catch { /* the banner says so */ }
 }
 
@@ -972,7 +973,7 @@ function showView(view) {
     $(panel).hidden = view !== v;
   }
   if (view === "playlists") loadPlaylists();
-  if (view === "rooms") { pollRooms(); renderRoomsPanel(true); }
+  if (view === "rooms") { pollRooms().then(() => loadBalances(true)); renderRoomsPanel(true); }
 }
 
 async function loadPlaylists() {
@@ -1290,6 +1291,8 @@ function renderRoomsPanel(force) {
           }
         }
         row.append(name, acts);
+        const rec = state.rooms.find((r) => r.uid === m.uid);
+        if (rec && rec.balance_supported) row.append(buildBalance(m));
       }
       li.append(row);
     }
@@ -1298,6 +1301,102 @@ function renderRoomsPanel(force) {
   const want = state.roomsFocus || hadFocus;
   state.roomsFocus = null;
   if (want) { const el = ul.querySelector(`[data-key="${want}"]`); if (el) el.focus({ preventScroll: true }); }
+}
+
+// ---- balance (docs/quick/07): -100 (all left) to 100 (all right) on each room that has it; the room's own, not its group's ------------
+
+const balanceSend = {};                                     // uid -> { want, inflight, last }: one request at a time, at most one per 250 ms
+const balanceLoading = new Set();
+
+function balanceText(v) {
+  if (v === null || v === undefined) return "…";
+  return v === 0 ? "Centre" : v > 0 ? `Right ${v}` : `Left ${-v}`;
+}
+
+async function readBalance(uid) {
+  if (balanceLoading.has(uid)) return;
+  balanceLoading.add(uid);
+  try { state.balance[uid] = (await api(`/api/rooms/${encodeURIComponent(uid)}/balance`, undefined, { slow: true })).balance; }
+  catch { /* stays unknown: the slider waits */ }
+  finally { balanceLoading.delete(uid); }
+  const job = balanceSend[uid];
+  if (!job || (job.want === null && !job.inflight)) showBalance(uid);       // never overwrite a value the user is setting
+}
+
+async function loadBalances(all) {
+  // every room that has balance and whose value isn't known yet (or all of them, when the Rooms view opens: the CLI or
+  // the Sonos app may have changed one)
+  const uids = state.rooms.filter((r) => r.balance_supported && (all || state.balance[r.uid] === undefined || state.balance[r.uid] === null)).map((r) => r.uid);
+  await Promise.all(uids.map(readBalance));
+}
+
+async function pumpBalance(uid) {
+  const job = balanceSend[uid];
+  if (job.inflight || job.want === null) return;
+  const wait = 250 - (performance.now() - job.last);
+  if (wait > 0) { if (!job.timer) job.timer = setTimeout(() => { job.timer = 0; pumpBalance(uid); }, wait); return; }
+  const value = job.want;
+  job.want = null;
+  job.inflight = true;
+  job.last = performance.now();
+  try {
+    const r = await api(`/api/rooms/${encodeURIComponent(uid)}/balance`, { balance: value });
+    if (job.want === null) state.balance[uid] = r.balance;
+  } catch (e) {
+    plNote($("rooms-note"), e.message, true);
+    if (job.want === null) state.balance[uid] = undefined;                  // refused: read what the speaker really has
+  } finally {
+    job.inflight = false;
+  }
+  if (job.want !== null) pumpBalance(uid);                                  // the user moved it meanwhile: send the latest
+  else if (state.balance[uid] === undefined) readBalance(uid);
+  else showBalance(uid);
+}
+
+function sendBalance(uid, value) {
+  const job = (balanceSend[uid] ||= { want: null, inflight: false, last: 0, timer: 0 });
+  job.want = value;
+  pumpBalance(uid);
+}
+
+function showBalance(uid) {                                  // the slider and its words, in place (a re-render would skip a focused slider)
+  const range = document.getElementById(`balance-${uid}`);
+  if (!range) return;
+  const v = state.balance[uid];
+  const known = v !== null && v !== undefined;
+  range.disabled = !known;                                   // until the speaker's value is known, a key press would overwrite it
+  if (known) range.value = String(v);
+  range.setAttribute("aria-valuetext", balanceText(v));
+  const out = range.parentElement.querySelector("output");
+  if (out) out.textContent = balanceText(v);
+}
+
+function buildBalance(m) {
+  const wrap = document.createElement("div");
+  wrap.className = "balance";
+  const label = document.createElement("label");
+  label.textContent = "Balance";
+  const value = state.balance[m.uid];
+  const range = document.createElement("input");
+  range.type = "range"; range.min = "-100"; range.max = "100"; range.step = "1";
+  range.value = String(value ?? 0);
+  range.disabled = value === null || value === undefined;
+  range.id = `balance-${m.uid}`;
+  range.dataset.key = `balance-${m.uid}`;
+  range.setAttribute("aria-label", `Balance for ${m.name}, left to right`);
+  label.htmlFor = range.id;
+  const out = document.createElement("output");
+  out.htmlFor = range.id;
+  const show = (v) => { out.textContent = balanceText(v); range.setAttribute("aria-valuetext", balanceText(v)); };
+  show(value);
+  const left = document.createElement("span"); left.className = "side"; left.textContent = "L"; left.setAttribute("aria-hidden", "true");
+  const right = document.createElement("span"); right.className = "side"; right.textContent = "R"; right.setAttribute("aria-hidden", "true");
+  range.addEventListener("input", () => { const v = Number(range.value); state.balance[m.uid] = v; show(v); sendBalance(m.uid, v); });
+  const centre = button("Centre", () => { range.value = "0"; state.balance[m.uid] = 0; show(0); sendBalance(m.uid, 0); }, true);
+  centre.setAttribute("aria-label", `Centre the balance for ${m.name}`);
+  centre.dataset.key = `centre-${m.uid}`;
+  wrap.append(label, left, range, right, out, centre);
+  return wrap;
 }
 
 $("group-all").addEventListener("click", () => {

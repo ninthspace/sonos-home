@@ -81,6 +81,9 @@ class FakeSoCo:
         self.transport_state = STOPPED
         self.position = 0                         # seconds into the current track
         self._source: str | None = None           # a non-queue source (radio, Spotify…), see set_source()
+        self._channels = (100, 100)               # balance: the left and right channel volumes (LF/RF), centred
+        self.channel: str | None = None           # the place in a stereo pair or home theatre, as SoCo's `channel`
+        self.fail_balance = False                 # a test sets it to make the speaker refuse balance reads and writes
         self.calls.clear()
 
     def __setattr__(self, name, value):
@@ -114,6 +117,23 @@ class FakeSoCo:
     def get_speaker_info(self, refresh: bool = False) -> dict:
         return {"zone_name": self._name, "model_name": self.model_name, "uid": self.uid,
                 "software_version": "11.16.1"}
+
+    # ---- balance (LF/RF channel volumes; a stereo pair shares one setting, as the real Office pair did) -----------------
+    @property
+    def balance(self) -> tuple[int, int]:
+        owner = self.pair_of or self
+        if owner.fail_balance:
+            raise OSError("fake: the speaker refused the balance call")
+        return owner._channels
+
+    @balance.setter
+    def balance(self, left_right) -> None:
+        owner = self.pair_of or self
+        if owner.fail_balance:
+            raise OSError("fake: the speaker refused the balance call")
+        left, right = (max(0, min(100, int(v))) for v in left_right)          # SoCo clamps each to 0-100
+        owner._channels = (left, right)
+        self.calls.append(("balance", (left, right)))
 
     # ---- groups -------------------------------------------------------------------------------
     @property
@@ -405,6 +425,7 @@ class FakeSystem:
         self.office_satellite = self._add("RINCON_B8E937B80E7401400", "Office", "192.168.0.27",
                                           "Sonos PLAY:1", visible=False)
         self.office_satellite.pair_of = self.office
+        self.office.channel, self.office_satellite.channel = "LF", "RF"
         self.office_satellite.coordinator = self.office
         self.bedroom = self._add("RINCON_B8E937A005B801400", "Bedroom", "192.168.0.31", "Sonos PLAY:1")
         self.kitchen = self._add("RINCON_347E5C4251C401400", "Kitchen", "192.168.0.29", "Sonos PLAY:3")

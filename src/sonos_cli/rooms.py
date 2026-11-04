@@ -21,8 +21,19 @@ from typing import Callable, Iterable
 from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
+from . import balance
+
 OURS_PATHS = ("/media/", "/live/", "/remote/")
 ACTIVE_STATES = {"PLAYING", "PAUSED_PLAYBACK", "TRANSITIONING"}
+
+
+def member_channel(dev) -> str | None:
+    """The speaker's place in a stereo pair or home theatre ("LF", "RF", "LF,RF", "SW", "LR", "RR") or None, from the
+    topology SoCo already holds; never fails a discovery."""
+    try:
+        return dev.channel
+    except Exception:
+        return None
 
 
 def validate_room_name(name) -> str:
@@ -114,6 +125,7 @@ class RoomMonitor:
                 d = room.as_dict()
                 st = self._states.get(room.coordinator_uid) or {}
                 d.update(state=st.get("state"), volume=st.get("volume"), mute=st.get("mute"))
+                d["balance_supported"] = balance.room_has_balance(d)
                 d["online"] = room.online and st.get("reachable", True) is not False
                 out.append(d)
             return out
@@ -217,7 +229,7 @@ class RoomMonitor:
         for dev in found:                          # all SoCo calls happen here, outside the lock
             try:
                 coord = dev.group.coordinator
-                members = [{"uid": m.uid, "name": m.player_name, "ip": m.ip_address, "visible": m.is_visible}
+                members = [{"uid": m.uid, "name": m.player_name, "ip": m.ip_address, "visible": m.is_visible, "channel": member_channel(m)}
                            for m in sorted(dev.group.members, key=lambda m: m.ip_address)]
                 model = dev.get_speaker_info().get("model_name", "")
                 name = dev.player_name
@@ -276,7 +288,7 @@ class RoomMonitor:
             track = dev.get_current_track_info()
             group = dev.group
             coord = group.coordinator
-            members = [{"uid": m.uid, "name": m.player_name, "ip": m.ip_address, "visible": m.is_visible}
+            members = [{"uid": m.uid, "name": m.player_name, "ip": m.ip_address, "visible": m.is_visible, "channel": member_channel(m)}
                        for m in sorted(group.members, key=lambda m: m.ip_address)]
             state = {
                 "state": transport.get("current_transport_state"),

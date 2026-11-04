@@ -86,6 +86,7 @@ sonos -r Bedroom play song.flac              # another room
 
 sonos pause | resume | stop | next | prev
 sonos volume 30
+sonos -r Lounge balance 20                  # left/right balance: -100 (left) to 100 (right), 0 centred
 sonos status
 sonos rooms
 sonos rename Office Studio
@@ -98,6 +99,10 @@ With the service running, every command goes through it. Without it, `sonos play
 running while the room plays (Ctrl-C stops), and the other commands talk to the speakers directly. Playing a folder
 queues up to 500 tracks; hidden folders, links that lead outside your music folders and online-only Dropbox files are
 skipped, with a reason.
+
+Balance belongs to each room, not its group, and is stored on the speaker. It is offered on stereo pairs and on
+stereo products (Five, Port, Amp, Play:5, Play:3, Connect, Connect:Amp); a single mono speaker such as one Play:1 has none.
+The web page's Rooms view has a Balance slider and a Centre key on each room that has it.
 
 The room is `-r`, else `$SONOS_ROOM`, else `room` in `config.toml`, else **Office**. `--ip 192.168.0.21` picks the
 room that speaker belongs to (and skips discovery without the service); `$SONOS_IP` does the same unless you give `-r`.

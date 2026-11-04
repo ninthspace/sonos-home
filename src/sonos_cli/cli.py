@@ -9,10 +9,12 @@ import sys
 import time
 from pathlib import Path
 
+from . import balance as balance_mod
 from . import config
 from .client import ServiceClient, ServiceUnavailable
 from .media import clear_cache
 from .player import RoomNotFound, find_room, list_rooms
+from . import rooms as rooms_mod
 from .rooms import validate_room_name
 from .server import EmbeddedServer, local_ip_towards
 
@@ -90,6 +92,10 @@ def _parser() -> argparse.ArgumentParser:
     volume = sub.add_parser("volume", help="show or set the room's volume (0-100)")
     volume.add_argument("level", nargs="?", type=int)
     volume.set_defaults(func=cmd_volume)
+
+    bal = sub.add_parser("balance", help="show or set the room's left/right balance: -100 (left) to 100 (right), 0 centred")
+    bal.add_argument("value", nargs="?", type=int)
+    bal.set_defaults(func=cmd_balance)
 
     send = sub.add_parser("send", help="queue the audio on a web page: sonos send https://example.com/release/")
     send.add_argument("url")
@@ -383,6 +389,49 @@ def cmd_volume(args) -> int:
         if args.level is not None:
             coordinator.group.volume = max(0, min(100, args.level))
         print(coordinator.group.volume)
+        return 0
+
+
+def _direct_balance_device(args):
+    """No service: the room's own speaker, by --ip ($SONOS_IP) or by name, refused if it has no balance (as the service does)."""
+    devices = list_rooms()
+    if args.ip:
+        dev = next((d for d in devices if d.ip_address == args.ip), None)
+        if dev is None:
+            raise ValueError(f"No Sonos room has a speaker at {args.ip}")
+        if args.room_explicit and dev.player_name.casefold() != args.room.casefold():
+            raise ValueError(f"{args.ip} belongs to {dev.player_name}, not {args.room}")
+    else:
+        name = _room_name(args)
+        dev = next((d for d in devices if d.player_name.casefold() == name.casefold()), None)
+        if dev is None:
+            raise RoomNotFound(name, sorted({d.player_name for d in devices}))
+    room = {"uid": dev.uid, "name": dev.player_name, "model": dev.get_speaker_info().get("model_name", ""),
+            "members": [{"uid": dev.uid, "channel": rooms_mod.member_channel(dev)}]}
+    if not balance_mod.room_has_balance(room):
+        raise ValueError(f"{dev.player_name} is a single mono speaker ({room['model'] or 'unknown model'}), so it has no balance setting")
+    return dev
+
+
+def _balance_text(value: int) -> str:
+    return "0 (centre)" if value == 0 else f"{value} ({'right' if value > 0 else 'left'} {abs(value)})"
+
+
+def cmd_balance(args) -> int:
+    if args.value is not None and not -100 <= args.value <= 100:
+        raise ValueError("balance must be from -100 (left) to 100 (right)")
+    try:
+        client = _client()
+        uid = _room_uid(client, args)
+        path = f"/api/rooms/{uid}/balance"
+        r = client.post(path, {"balance": args.value}) if args.value is not None else client.get(path)
+        print(_balance_text(r["balance"]))
+        return 0
+    except ServiceUnavailable:
+        dev = _direct_balance_device(args)                    # balance belongs to the room's own speaker, not its group
+        if args.value is not None:
+            dev.balance = balance_mod.to_channels(args.value)
+        print(_balance_text(balance_mod.from_channels(*dev.balance)))
         return 0
 
 

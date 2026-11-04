@@ -28,6 +28,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.responses import Response, StreamingResponse, FileResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route, WebSocketRoute
 
+from . import balance as balance_mod
 from . import config as config_mod
 from . import media
 from .library import Library, LiveLibrary, PathNotAllowed
@@ -609,6 +610,58 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         except PlayError as e:
             return problem(e)
 
+    balance_locks: dict[str, threading.Lock] = {}
+    balance_locks_guard = threading.Lock()
+
+    def balance_lock(uid: str) -> threading.Lock:
+        """One balance change at a time per speaker: SoCo writes left and right as two calls, so two overlapping changes could
+        interleave and leave a mix of both."""
+        with balance_locks_guard:
+            return balance_locks.setdefault(uid, threading.Lock())
+
+    def balance_device(uid: str):
+        """The room's own speaker (balance belongs to the room, not its group), once the room is known to support it."""
+        room = next((r for r in monitor.rooms() if r["uid"] == uid), None) if monitor is not None else None
+        if room is None:
+            raise playback.UnknownRoom(f"No such room: {uid}")
+        if not balance_mod.room_has_balance(room):
+            raise playback.NoBalance(f"{room['name']} is a single mono speaker ({room.get('model') or 'unknown model'}), so it has no balance setting")
+        return monitor.device(uid)
+
+    async def balance_get_route(request: Request):
+        """GET /api/rooms/{uid}/balance: {"balance": -100..100, "left": 0-100, "right": 0-100}."""
+        try:
+            uid = request.path_params["uid"]
+
+            def go():
+                dev = balance_device(uid)
+                left, right = speaker_call("read its balance", lambda: dev.balance)
+                return {"balance": balance_mod.from_channels(left, right), "left": int(left), "right": int(right)}
+
+            return JSONResponse(await anyio.to_thread.run_sync(go))
+        except PlayError as e:
+            return problem(e)
+
+    async def balance_set_route(request: Request):
+        """POST /api/rooms/{uid}/balance {"balance": -100..100}: set on the room's own speaker; answers the value read back."""
+        try:
+            body = await json_body(request)
+            value = body.get("balance")
+            if not isinstance(value, int) or isinstance(value, bool) or not -100 <= value <= 100:
+                raise PlayError("balance must be a whole number from -100 (left) to 100 (right)")
+            uid = request.path_params["uid"]
+
+            def go():
+                dev = balance_device(uid)
+                with balance_lock(uid):
+                    speaker_call("change its balance", lambda: setattr(dev, "balance", balance_mod.to_channels(value)))
+                    left, right = speaker_call("read its balance", lambda: dev.balance)
+                return {"balance": balance_mod.from_channels(left, right), "left": int(left), "right": int(right)}
+
+            return JSONResponse(await anyio.to_thread.run_sync(go))
+        except PlayError as e:
+            return problem(e)
+
     async def fake_position_route(request: Request):
         """POST /api/fake/rooms/{uid}/position {"position": seconds}: only with `--fake-rooms` (there is no fake system, and so
         no route, in a real service). Puts a fake coordinator's playhead where a browser check needs it, inside the track."""
@@ -1180,6 +1233,8 @@ def create_app(cfg: config_mod.Config | None = None, *, library: Library | None 
         Route("/api/rooms/{uid}/ungroup", ungroup_route, methods=["POST"]),
         Route("/api/rooms/{uid}/transport", transport_route, methods=["POST"]),
         Route("/api/rooms/{uid}/volume", volume_route, methods=["POST"]),
+        Route("/api/rooms/{uid}/balance", balance_get_route, methods=["GET"]),
+        Route("/api/rooms/{uid}/balance", balance_set_route, methods=["POST"]),
         Route("/api/rooms/{uid}/seek", seek_route, methods=["POST"]),
         Route("/api/folders", folders_route, methods=["GET"]),
         Route("/api/folders/add", folders_add_route, methods=["POST"]),

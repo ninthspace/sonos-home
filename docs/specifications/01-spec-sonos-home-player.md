@@ -1,5 +1,6 @@
 # Spec: Sonos Home Player
 
+**Amended**: 2026-11-04 — new NFR7: gapless playback between queued tracks, as the user observed it working  
 **Amended**: 2026-11-04 — FR20 withdrawn: "Also play here" removed (docs/quick/06), which also reverts docs/quick/05's delay  
 **Amended**: 2026-11-04 — FR20: the local copy is delayed about 4 s to sound with the speaker (docs/quick/05)  
 **Amended**: 2026-11-04 — NFR2: the user judges the 6 s limit by ear; a measured figure is no longer required (the user's choice in chat, epic 01-08 Story 4)  
@@ -64,6 +65,7 @@
 - **NFR3**: Idle service under 150 MB RSS and averaging under 1% CPU over 5 minutes. Measured with `ps` on the installed agent with no UI open, and again with one UI tab polling. `[user]` (epic 01-08 Story 7).
 - **NFR4**: Installation needs only Python 3.12+ and uv. **Amended (2026-11-03, the user):** ffmpeg is bundled with the package (the `imageio-ffmpeg` wheel; no ffprobe, ffmpeg probes files itself) instead of needing Homebrew, and the launcher app for `sonos service install` ships prebuilt instead of needing the Xcode command line tools (epic 01-09). A config-path ffmpeg still wins; the bundled copy comes before a Homebrew one on `PATH`, so every Mac runs the same build unless the user says otherwise. The UI and extension have no build step.
 - **NFR5**: After a speaker changes IP, the service finds it again within 60 s without a restart (unit test with fake discovery), and after a speaker is unplugged and replugged. `[unit]` + `[user]` (unplugging is the user's check, epic 01-08 Story 6)
+- **NFR7**: Consecutive tracks in a queue play without a gap, so a continuous mix album plays seamlessly. Observed by the user on 2026-11-04 with the Faircamp release https://shtl-experiment.com/foreshore/ sent to a room (MP3s through the `/remote/` proxy, FR13). Anything that changes what the speaker receives for a track must keep it. Remote audio passes through byte for byte, so an MP3's own gapless information (encoder delay and padding) reaches the speaker; `tests/test_send.py::test_the_proxy_serves_the_origins_bytes_and_passes_range_through` already holds the proxy to the origin's bytes. A converted local file must keep the source's exact sample count; nothing tests that yet, and local files have not been checked for gaps.
 - **NFR6**: Browser-origin hardening (no login, but no drive-by control):
   - A request whose `Host` isn't the Mac's IP, its hostname, `localhost` or `127.0.0.1` is refused (stops DNS rebinding).
   - Every state-changing request, and every WebSocket upgrade, must carry an `Origin` that is the service's own or `chrome-extension://<configured id>`.
