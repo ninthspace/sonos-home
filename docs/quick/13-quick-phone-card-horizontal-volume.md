@@ -1,7 +1,7 @@
 # On a phone's room cards, a horizontal volume slider and spaced buttons
 
 **Date**: 2026-11-05  
-**Status**: In Progress  
+**Status**: Complete  
 **Source**: the user in chat (2026-11-05), with a screenshot of quick 12's Bedroom card on their phone (Rename, Group with… and Group touching; a tall vertical fader on the right with empty space beside it): "make these horizontal sliders, and fix button spacing". The card's controls sit in `.room-manage`, outside `.listing`, so `.listing .row-actions { display: flex; gap: .45rem }` and its smaller button padding (style.css) don't reach them; the fader is the strip's vertical range (`.strip-fader`, `writing-mode: vertical-lr`) in the card grid's right column.  
 **Effort**: medium  
 **Audit**: pass (2026-11-05); a Suggestion taken (criterion 3's Evidence now says what covers Centre and Leave group); not taken: a tap on the "Volume" label selects the room, as the rest of the card does  
@@ -19,7 +19,7 @@
 - At 1000 px and 1400 px the strips, their vertical faders and `main` match b904524's boxes within 1 px. `[browser]`
   - Evidence: browser-observed, frames with content 998×798 and 1398×898, Rooms tab, before and after the change: strips (21.3, 82.9, 77.1×255) … (275.6, …), faders (39.4, 150.8, 40.8×148.9) … (293.8, …), `main` (374, 82.9, 602.8×711.6) at 998; strips (34, 91.4, 159.2×374) … (554.8, …), faders (110.2, 188.8, 40.8×226.5) … (631, …), `main` (748, 91.4, 616×711.6) at 1398 — identical to 0.1 px — red: n/a — browser-observed
 - On the user's phone: each card's volume is a horizontal slider that changes the room's volume when dragged sideways, an up/down swipe over it scrolls the page, and the buttons are spaced. `[user]`
-  - Waiting on user: after reinstalling the service, on your phone's Rooms tab drag a card's volume slider sideways (the volume changes), swipe up and down starting on it (the page scrolls), and check the buttons have space between them.
+  - Evidence (user, 2026-11-05): after reinstalling, on their phone the user reported "looks good" and confirmed dragging a card's volume slider sideways changes the volume, an up/down swipe starting on it scrolls the page, and the buttons are spaced — red: n/a — user
 
 ### Horizontal card volume
 **Task**: 13.1  
