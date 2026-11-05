@@ -73,7 +73,7 @@ async function pollRooms() {
 
 const STRIP_COLOURS = ["#3d7bff", "#ff4fa3", "#2fe0a0", "#ff8a3d", "#a78bff", "#3ddcff"];
 
-const roomEls = new Map();         // uid -> { li, btn, name, word, led, fader, level }: a strip is built once and updated in place, so a poll can't take a fader out of a hand
+const roomEls = new Map();         // uid -> { li, btn, name, word, led, fader, level, slot }: a strip is built once and updated in place, so a poll can't take a fader out of a hand
 const faders = {};                 // uid -> the fader's send state
 function faderState(uid) { return faders[uid] || (faders[uid] = { dragging: false, inflight: false, next: null, last: 0, timer: 0, holdUntil: 0 }); }
 
@@ -145,8 +145,12 @@ function buildStrip(r) {
   const level = document.createElement("span");
   level.className = "vol";
   level.setAttribute("aria-hidden", "true");
-  li.append(btn, chan, level);
-  li.addEventListener("click", (ev) => { if (!ev.target.closest(".strip-fader")) selectRoom(uid); });          // anywhere on the strip but the fader selects the room
+  const slot = document.createElement("div");             // on a phone, renderRoomsPanel puts the room's rename / group / balance here
+  slot.className = "manage room-manage";
+  li.append(btn, chan, level, slot);
+  // anywhere on the strip but the fader and the room's controls selects the room. The path is taken as dispatched: Rename and
+  // Cancel re-render the controls in their own handler, so by the time the click reaches here the button is detached.
+  li.addEventListener("click", (ev) => { if (!ev.composedPath().some((n) => n.classList && (n.classList.contains("strip-fader") || n.classList.contains("room-manage")))) selectRoom(uid); });
   fader.addEventListener("pointerdown", (ev) => {
     if (ev.button !== 0) return;                                                 // a right-click or ctrl-click is not a drag
     try { fader.setPointerCapture(ev.pointerId); } catch { /* a synthetic pointer */ }
@@ -162,7 +166,7 @@ function buildStrip(r) {
     level.textContent = String(v);
     sendRoomVolume(uid, v);
   });
-  return { li, btn, name, word, led, fader, level };
+  return { li, btn, name, word, led, fader, level, slot };
 }
 
 function updateStrip(el, r, order) {
@@ -1027,6 +1031,7 @@ function showView(view) {
 // On a phone the strip row is hidden off the Rooms tab and can't be measured there: reveal the selected room again once it shows.
 function reshowRoomRow() { revealedRoom = null; revealSelectedRoom(); roomEdges(); }
 phone.addEventListener("change", () => {
+  if (state.view === "rooms") renderRoomsPanel(true);     // the rooms' rows move between the list and the cards
   if (phone.matches) return;
   if (state.view === "queue") showView("music");          // no Queue tab above 760 px
   reshowRoomRow();                                        // widened from a phone tab: the row is in the side column again
@@ -1253,10 +1258,12 @@ async function roomAction(path, body, okText, focusKey) {
 function renderRoomsPanel(force) {
   const panel = $("rooms-panel");
   const active = document.activeElement;
-  if (!force && active && panel.contains(active) && (active.tagName === "INPUT" || active.tagName === "SELECT")) return;     // never pull a field out from under the user
-  const hadFocus = panel.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+  const ours = !!active && (panel.contains(active) || !!active.closest(".room-manage"));     // the rows live in the list, or in the room cards on a phone
+  if (!force && ours && (active.tagName === "INPUT" || active.tagName === "SELECT")) return;     // never pull a field out from under the user
+  const hadFocus = ours ? active.dataset.key : null;
   const ul = $("rooms-manage");
   ul.replaceChildren();
+  for (const el of roomEls.values()) el.slot.replaceChildren();
   const groups = [], seenGroups = new Set();                // /api/rooms lists a grouped room once per member: show each group once
   for (const r of state.rooms) {
     if (seenGroups.has(r.coordinator_uid)) continue;
@@ -1352,13 +1359,20 @@ function renderRoomsPanel(force) {
         const rec = state.rooms.find((r) => r.uid === m.uid);
         if (rec && rec.balance_supported) row.append(buildBalance(m));
       }
-      li.append(row);
+      const card = phone.matches && roomEls.get(m.uid);       // on a phone, in the room's own card beside its fader (a room with no strip stays in the list)
+      if (card && members.length > 1) {                       // the group's heading stays in the hidden list: the card names the other rooms itself
+        const with_ = document.createElement("p");
+        with_.className = "grouped-with";
+        with_.textContent = `Grouped with ${members.filter((x) => x.uid !== m.uid).map((x) => x.name).join(" + ")}`;
+        card.slot.append(with_);
+      }
+      (card ? card.slot : li).append(row);
     }
     ul.append(li);
   }
   const want = state.roomsFocus || hadFocus;
   state.roomsFocus = null;
-  if (want) { const el = ul.querySelector(`[data-key="${want}"]`); if (el) el.focus({ preventScroll: true }); }
+  if (want) { const el = document.querySelector(`#rooms-manage [data-key="${want}"], .room-manage [data-key="${want}"]`); if (el) el.focus({ preventScroll: true }); }
 }
 
 // ---- balance (docs/quick/07): -100 (all left) to 100 (all right) on each room that has it; the room's own, not its group's ------------
