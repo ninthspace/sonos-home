@@ -624,13 +624,16 @@ function renderQueue() {
   }
   const buttons = ol.querySelectorAll("button");
   if (had >= 0 && buttons[had]) buttons[had].focus({ preventScroll: true });            // a re-render must not drop keyboard focus
-  const cur = ol.querySelector('li[data-current="true"]');
-  if (cur && q.current !== lastQueueCurrent) {              // the current track at the top, the played ones above it; the list only, never the page
-    ol.scrollTop = cur.offsetTop - ol.offsetTop;
-  }
+  if (q.current !== lastQueueCurrent) scrollQueueToCurrent();
   lastQueueCurrent = q.current;
 }
 let lastQueueCurrent = null;
+// The current track at the top, the played ones above it; the list only, never the page.
+function scrollQueueToCurrent() {
+  const ol = $("queue-list");
+  const cur = ol.querySelector('li[data-current="true"]');
+  if (cur) ol.scrollTop = cur.offsetTop - ol.offsetTop;
+}
 
 // ---- browsing -----------------------------------------------------------------------------------------
 
@@ -1003,16 +1006,31 @@ async function plLock(fn, noteEl) {
 }
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
+// The Queue view exists only on a phone (760 px and below), where the queue and the room strips are tabs of their own: style.css
+// shows them by body[data-view]. Above that the queue and strips are always in the side column beside the panel.
+const phone = matchMedia("(max-width: 760px)");
 function showView(view) {
   state.view = view;
-  const panels = { music: "music-panel", playlists: "playlists-panel", web: "web-panel", rooms: "rooms-panel" };
+  document.body.dataset.view = view;
+  const panels = { queue: null, music: "music-panel", playlists: "playlists-panel", web: "web-panel", rooms: "rooms-panel" };
   for (const [v, panel] of Object.entries(panels)) {
     $(`view-${v}`).setAttribute("aria-pressed", String(view === v));
-    $(panel).hidden = view !== v;
+    if (panel) $(panel).hidden = view !== v;
   }
   if (view === "playlists") loadPlaylists();
-  if (view === "rooms") { pollRooms().then(() => loadBalances(true)); renderRoomsPanel(true); }
+  if (view === "rooms") {
+    pollRooms().then(() => loadBalances(true)); renderRoomsPanel(true);
+    if (phone.matches) reshowRoomRow();
+  }
+  if (view === "queue") scrollQueueToCurrent();            // the list was hidden: its scroll position is lost
 }
+// On a phone the strip row is hidden off the Rooms tab and can't be measured there: reveal the selected room again once it shows.
+function reshowRoomRow() { revealedRoom = null; revealSelectedRoom(); roomEdges(); }
+phone.addEventListener("change", () => {
+  if (phone.matches) return;
+  if (state.view === "queue") showView("music");          // no Queue tab above 760 px
+  reshowRoomRow();                                        // widened from a phone tab: the row is in the side column again
+});
 
 async function loadPlaylists() {
   try { state.playlists = await api("/api/playlists"); plNote($("pl-index-note"), ""); }
@@ -1117,6 +1135,7 @@ function updatePlayLabel() {
   const label = room ? `Play on ${room.name}` : "Play on this room";
   $("pl-play").textContent = label;
   $("send-play").textContent = label;
+  $("np-room").textContent = room ? room.name : "";        // on a phone the strips are on the Rooms tab only: the player says which room plays
 }
 
 async function plAction(action, body, ok) {
@@ -1197,6 +1216,7 @@ async function createPlaylist(name) {
   return r.id;
 }
 
+$("view-queue").addEventListener("click", () => showView("queue"));
 $("view-music").addEventListener("click", () => showView("music"));
 $("view-playlists").addEventListener("click", () => { state.plOpen = null; showView("playlists"); });
 $("view-rooms").addEventListener("click", () => showView("rooms"));

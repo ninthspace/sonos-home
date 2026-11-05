@@ -280,11 +280,23 @@ dialog::backdrop { background: rgba(4, 8, 24, .7); }
   .chan { margin: .6rem 0 .4rem; }
   li.room .vol { font-size: 1.25rem; padding-bottom: .6rem; }
 }
+.phone-only { display: none; }                           /* the Queue tab and the player's room name: phone only */
+.player .room-name { margin: 0 0 .2rem; font: 600 .95rem/1.1 var(--cond); letter-spacing: .06em; text-transform: uppercase; color: var(--mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 @media (max-width: 760px) {
   :root { --player: 12.5rem; }
-  .top { padding: 1rem; }
-  .top h1 { font-size: 2rem; }
-  .views button { padding: .5rem .9rem; font-size: 1.15rem; }
+  .phone-only { display: revert; }
+  /* each tab shows only its own content: the strips (and their faders) on Rooms, the queue on Queue */
+  body:not([data-view="rooms"]) #room-list { display: none; }
+  body:not([data-view="queue"]) .queue { display: none; }
+  body[data-view="queue"] main { display: none; }
+  body[data-view="queue"] .queue { margin-top: 0; }
+  .top { width: 100%; padding: .75rem 1rem; gap: .6rem; }       /* its auto margins would otherwise shrink it to the tab row's width in the flex column */
+  .top h1 { font-size: 1.6rem; }
+  /* five tabs in one row on a 375 px phone, so the content keeps the height; narrower, they wrap and fill the rows */
+  .views { gap: .5rem .3rem; width: 100%; }
+  .views button { flex: 1 0 auto; padding: .55rem .35rem; font-size: 1rem; }
   .layout { grid-template-columns: minmax(0, 1fr); padding: .5rem 1rem 1rem; gap: 1rem; }
   #room-list li.room { height: 17rem; }                    /* a longer fader for a thumb */
   .player { grid-template-columns: minmax(0, 1fr) auto; padding: .7rem 1rem; gap: .6rem 1rem; }
@@ -298,6 +310,18 @@ dialog::backdrop { background: rgba(4, 8, 24, .7); }
   .listing .name { flex-basis: 100%; padding-bottom: .1rem; }
   .listing .row-actions { padding-bottom: .65rem; }
   #crumbs { font-size: 1.6rem; }
+}
+/* A phone upright: the page never scrolls; the top bar, the selected tab's content (the one scroller) and the player, top to bottom.
+   Shorter (a phone on its side) the top bar and player would leave no room for the content and cut the player off, so the page
+   scrolls as above 760 px, the player fixed over the body's bottom padding. */
+@media (max-width: 760px) and (min-height: 520px) {
+  body { height: 100vh; height: 100dvh; min-height: 0; padding-bottom: 0; display: flex; flex-direction: column; overflow: hidden; }
+  #banner, .top, .player { flex: none; }
+  .player { position: static; }
+  .layout { flex: 1; min-height: 0; width: 100%; overflow-y: auto; overscroll-behavior-y: contain; align-content: start; }
+  body[data-view="queue"] .layout { display: flex; flex-direction: column; overflow: hidden; }
+  body[data-view="queue"] .rooms, body[data-view="queue"] .queue { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  body[data-view="queue"] .queue ol { flex: 1; min-height: 0; max-height: none; }     /* the list scrolls inside, so the current row can sit at the top */
 }
 @media (prefers-reduced-motion: no-preference) {
   button { transition: transform .08s, box-shadow .08s, filter .12s; }

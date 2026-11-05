@@ -6,12 +6,13 @@
 <title>Sonos at home</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-view="music">
 <div id="banner" role="alert" hidden>The service is unreachable. Check that <code>sonos service run</code> is going on this Mac.</div>
 
 <header class="top">
   <h1>Sonos at home</h1>
   <div class="views" role="group" aria-label="View">
+    <button id="view-queue" type="button" aria-pressed="false" class="phone-only">Queue</button>
     <button id="view-music" type="button" aria-pressed="true">Music</button>
     <button id="view-playlists" type="button" aria-pressed="false">Playlists</button>
     <button id="view-web" type="button" aria-pressed="false">Web page</button>
@@ -180,6 +181,7 @@
 <p id="announce" class="sr" aria-live="polite"></p>
 <footer class="player" aria-label="Now playing">
   <div class="track">
+    <p id="np-room" class="room-name phone-only"></p>
     <p id="np-title" class="title">Nothing playing</p>
     <p id="np-meta" class="meta">Pick a room and a file.</p>
     <p id="seek-note" class="meta seek-note" role="status"></p>
